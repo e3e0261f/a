@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = "0.4.45"
+env = "1.0.1"
 
 # The profile that 'dist' will build with
 [profile.dist]

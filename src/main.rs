@@ -1,47 +1,49 @@
 use std::env;
-use std::fs::{OpenOptions, read_to_string};
-use std::io::Write;
-use chrono::Local; // ⏳ 引入時間箭頭（需要 cargo add chrono）
+use chrono::Local;
+
+// 🚢 諸侯引渡：把 a_note 改成你項目真正的集裝箱名字 `a`！
+use a::color::{paint_line, TerminalColor};
+use a::storage::{append_note, read_note};
 
 fn main() {
-    // 1. 進入貨物口：抓取終端輸入的所有參數（大型活動廠房）
+    // 1. 收集火車：args 是整條參數火車 [Vec<String>]
     let args: Vec<String> = env::args().collect();
     
-    // 2. 獲取今年是哪一年（比如 2026）
+    // 2. 獲取今年是哪一年
     let current_year = Local::now().format("%Y").to_string();
     let file_path = format!("/home/lee/BOok/NOte/{}.note", current_year);
 
-    // 3. 發動火眼金睛判定：如果沒有傳參數，或者傳了幫助提示
+    // 3. 安全檢查：如果火車裡只有 1 節車廂（代表玩家只敲了 a，後面啥都沒寫）
     if args.len() < 2 {
         println!("用法: a [您的靈感創意/支援多行貼上]");
-        println!("      a -a 或 a --all #列印今年全部筆記內容");
+        println!("      a -a 或 a --all #列印今年全部筆記內容（隔行換色版）");
         return;
     }
 
-    // 4. 單選題判定：是不是要看全部內容？
+    // 4. ✨ 終極修復：拿火車的【第二節車廂 args[1]】去和單個卡片比對！
     if args[1] == "-a" || args[1] == "--all" {
-        if let Ok(content) = read_to_string(&file_path) {
-            print!("{}", content); // 🚀 完美原樣列印，格式絕對不亂
+        // ➔ 把物流標籤 ::<String> 焊在 read_note 函數體的屁股後面！
+        if let Ok(content) = read_note(&file_path) { 
+            // 完美解包！content 被安全鎖定為 String，流水線暢通無阻！
+            for (index, line) in content.lines().enumerate() {
+                if index % 2 == 0 {
+                    paint_line(line, TerminalColor::Green); // 🟢 偶數行
+                } else {
+                    paint_line(line, TerminalColor::Cyan);  // 🔵 奇數行
+                }
+            }
         } else {
             println!("📂 今年還沒有任何靈感記錄哦！");
         }
         return;
     }
 
-    // 5. 破除 Bash 扁平化妖法：把所有參數用空格連起來，並保持換行格式
-    // 跳過第一個參數（程序名自己），把剩下的多行文字原封不動打包
+    // 5. 打包多行文字：把第二節車廂之後的所有文字用空格連起來
     let note_content = args[1..].join(" ");
 
-    // 6. 物理內存與硬碟打通：開啟追加模式打開檔案
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-    {
-        // 寫入靈感的同時，自動在末尾補上換行符，死死鎖定格式
-        if writeln!(file, "{}", note_content).is_ok() {
-            println!("✨ 靈感已安全鎖進 {} 廠房！", current_year);
-        }
+    // 6. 物理追加寫入硬碟
+    if append_note(&file_path, &note_content).is_ok() {
+        println!("✨ 靈感已安全送達外部諸侯廠房！");
     }
 }
 
