@@ -1,12 +1,9 @@
 // src/gist.rs
 use reqwest::blocking::Client;
-use serde_json::json;
-
-// 🚢 諸侯引渡
+use serde_json::{json, Value};
 use crate::GameConfig;
 
 pub fn sync_to_gist(content: &str, file_name: &str, token: &str) -> Result<(), String> {
-    // 🏛️ 聽總工程師的命令：不繞彎、不走代理！用最純淨、最合法的正規軍身分直接出海！
     let client = Client::builder()
         .user_agent("Cyber-Forge-Client")
         .build()
@@ -14,7 +11,6 @@ pub fn sync_to_gist(content: &str, file_name: &str, token: &str) -> Result<(), S
 
     let url = GameConfig::GIST_URL; 
 
-    // 📦 毫無瑕疵的完美官方 JSON 貨物（只更新當前檔案，其他年份的檔案會安全地在雲端並存）
     let body = json!({
         "description": "Cyber-Forge 赛博灵感管家 自动云端加密备份法典",
         "files": {
@@ -24,7 +20,6 @@ pub fn sync_to_gist(content: &str, file_name: &str, token: &str) -> Result<(), S
         }
     });
 
-    // 🚀 跨海大炮直接發射！帶上 GitHub 規定的合約標頭
     let response = client.patch(url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Accept", "application/vnd.github+json")
@@ -46,5 +41,40 @@ pub fn sync_to_gist(content: &str, file_name: &str, token: &str) -> Result<(), S
             }
         },
         Err(e) => Err(format!("❌ 跨海管道斷裂: {}", e)),
+    }
+}
+
+// 🌐 新增：從雲端 Gist 抓取特定檔案內容的公式
+pub fn fetch_from_gist(file_name: &str, token: &str) -> Result<String, String> {
+    let client = Client::builder()
+        .user_agent("Cyber-Forge-Client")
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let url = GameConfig::GIST_URL;
+
+    let response = client.get(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send();
+
+    match response {
+        Ok(res) => {
+            if !res.status().is_success() {
+                return Err(format!("❌ 無法取得 Gist 內容，狀態碼: {}", res.status()));
+            }
+
+            let text = res.text().map_err(|e| e.to_string())?;
+            let json_val: Value = serde_json::from_str(&text).map_err(|e| format!("解析 JSON 失敗: {}", e))?;
+
+            // 從 JSON 結構中尋找 files -> file_name -> content
+            if let Some(content) = json_val["files"][file_name]["content"].as_str() {
+                Ok(content.to_string())
+            } else {
+                Err(format!("❌ 在雲端 Gist 中找不到檔案: {}", file_name))
+            }
+        },
+        Err(e) => Err(format!("❌ 聯絡雲端失敗: {}", e)),
     }
 }
