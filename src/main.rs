@@ -11,7 +11,6 @@ use a::{GameConfig, color::{paint_line, TerminalColor}, storage::{write_encrypte
 use a::encrypt::{encrypt_with_gpg, decrypt_with_gpg, decrypt_bytes_with_gpg};
 use a::gist::{sync_to_gist, fetch_from_gist, list_gist_files};
 
-// 交互式終端輸入輔助工具
 fn prompt_input(prompt: &str, default: Option<&str>) -> String {
     if let Some(def) = default {
         print!("🔹 {} [預設: {}]: ", prompt, def);
@@ -31,62 +30,85 @@ fn prompt_input(prompt: &str, default: Option<&str>) -> String {
     }
 }
 
-// 🧙‍♂️ 互動式初始化引導精靈
+// 🧙‍♂️ 智慧互動式引導精靈（自動回填現有值，按 Enter 保留）
 fn run_init_wizard() {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║       🛡️  Cyber-Forge 賽博靈感管家 · 初次配置引導精靈        ║");
+    println!("║       🛡️  Cyber-Forge 賽博靈感管家 · 配置引導精靈        ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
-    println!("此精靈將協助您配置金鑰、雲端倉庫與憑證，全流程本地加密持久化。\n");
+    println!("提示: 直接按下 Enter 可保留括號中的 [預設值/現有配置]。\n");
 
-    let note_dir_input = prompt_input("請確認/指定筆記本地存儲目錄", Some("~/BOok/NOte"));
-    let note_dir = GameConfig::expand_tilde(&note_dir_input);
-    if !note_dir.exists() {
-        let _ = fs::create_dir_all(&note_dir);
-        println!("  ↳ 📂 目錄已建立: {:?}", note_dir);
-    }
+    let current_dir = GameConfig::get_note_dir();
+    let current_dir_str = current_dir.to_str().unwrap_or("~/BOok/NOte");
 
-    println!("\n--- [步驟 1/3: GPG 金鑰配置] ---");
-    println!("提示: 請填寫您用於加解密的 GPG 金鑰指紋、子金鑰 ID 或郵箱 (範例: YOUR_KEY_ID 或 user@example.com)");
-    let key_id = prompt_input("請輸入您的 GPG 金鑰標識", None);
-    let key_file = note_dir.join("key_id");
-    let _ = fs::write(&key_file, &key_id);
-    println!("  ↳ 🔑 GPG 金鑰標識已保存至: {:?}", key_file);
-
-    println!("\n--- [步驟 2/3: 雲端 Gist 倉庫配置] ---");
-    println!("提示: 請填寫您專屬 Gist 的 32 位 ID (或直接貼入完整網址)");
-    let raw_gist = prompt_input("請輸入您的 Gist ID 或 URL", None);
-    let clean_gist_id = GameConfig::extract_clean_id(&raw_gist);
-    let gist_file = note_dir.join("gist_id");
-    let _ = fs::write(&gist_file, &clean_gist_id);
-    println!("  ↳ 🌐 Gist ID [{}] 已保存至: {:?}", clean_gist_id, gist_file);
-
-    println!("\n--- [步驟 3/3: GitHub Token 憑證加密] ---");
-    println!("提示: 請輸入具備 'gist' 權限的 GitHub Personal Access Token");
-    let token = prompt_input("請輸入 GitHub Token (貼上後將立即公鑰加密)", None);
-
-    print!("  ↳ 🔐 正在調用 GPG 密鑰 [{}] 封裝 token.gpg...", key_id);
-    io::stdout().flush().unwrap();
-
-    match encrypt_with_gpg(token.as_bytes(), &key_id) {
-        Ok(encrypted_token) => {
-            let token_path = note_dir.join("token.gpg");
-            if fs::write(&token_path, encrypted_token).is_ok() {
-                println!(" [成功]");
-                println!("  ↳ 🛡️ 憑證已安全加密落盤: {:?}", token_path);
-            } else {
-                println!(" [失敗: 寫入磁碟失敗]");
-            }
+    // 1. 目錄配置
+    let note_dir_input = prompt_input("請確認/指定筆記本地存儲目錄", Some(current_dir_str));
+    let note_dir = match GameConfig::set_persistent_dir(&note_dir_input) {
+        Ok(d) => {
+            println!("  ↳ 📂 存儲目錄已錨定: {:?}", d);
+            d
         },
         Err(e) => {
-            println!(" [失敗: {}]", e);
-            println!("⚠️ 請確認該 GPG 金鑰是否存在於本機密鑰庫中。");
+            println!("  ⚠️ 寫入目錄失敗 ({})，使用原目錄", e);
+            current_dir
         }
+    };
+
+    // 2. GPG 金鑰配置
+    println!("\n--- [步驟 1/3: GPG 金鑰配置] ---");
+    let existing_key = GameConfig::get_gpg_user_id().unwrap_or_default();
+    let key_prompt_default = if existing_key.is_empty() { None } else { Some(existing_key.as_str()) };
+    let key_id = prompt_input("請輸入 GPG 金鑰標識 (指紋/子金鑰ID/郵箱)", key_prompt_default);
+    
+    if !key_id.is_empty() {
+        let key_file = note_dir.join("key_id");
+        let _ = fs::write(&key_file, &key_id);
+        println!("  ↳ 🔑 GPG 金鑰已保存至: {:?}", key_file);
     }
 
-    println!("\n✨ 初始化配置全線圓滿完成！您現在可以立即使用 'a' 開始記錄靈感。\n");
+    // 3. Gist ID 配置
+    println!("\n--- [步驟 2/3: 雲端 Gist 倉庫配置] ---");
+    let existing_gist = GameConfig::get_gist_id().unwrap_or_default();
+    let gist_prompt_default = if existing_gist.is_empty() { None } else { Some(existing_gist.as_str()) };
+    let raw_gist = prompt_input("請輸入 Gist ID 或 URL", gist_prompt_default);
+    let clean_gist_id = GameConfig::extract_clean_id(&raw_gist);
+
+    if !clean_gist_id.is_empty() {
+        let gist_file = note_dir.join("gist_id");
+        let _ = fs::write(&gist_file, &clean_gist_id);
+        println!("  ↳ 🌐 Gist ID [{}] 已保存至: {:?}", clean_gist_id, gist_file);
+    }
+
+    // 4. Token 憑證配置
+    println!("\n--- [步驟 3/3: GitHub Token 憑證加密] ---");
+    let token_file = note_dir.join("token.gpg");
+    let has_token = token_file.exists();
+    let token_default = if has_token { Some("保留現有加密憑證") } else { None };
+    let token_input = prompt_input("請輸入 GitHub Personal Access Token", token_default);
+
+    if token_input != "保留現有加密憑證" && !token_input.is_empty() {
+        let active_key = if !key_id.is_empty() { key_id } else { existing_key };
+        if active_key.is_empty() {
+            println!("  ❌ 錯誤：未指定 GPG 金鑰，無法加密 Token");
+        } else {
+            print!("  ↳ 🔐 正在調用 GPG 密鑰 [{}] 封裝 token.gpg...", active_key);
+            io::stdout().flush().unwrap();
+            match encrypt_with_gpg(token_input.as_bytes(), &active_key) {
+                Ok(encrypted_token) => {
+                    if fs::write(&token_file, encrypted_token).is_ok() {
+                        println!(" [成功]");
+                        println!("  ↳ 🛡️ 憑證已安全加密落盤: {:?}", token_file);
+                    }
+                },
+                Err(e) => println!(" [失敗: {}]", e),
+            }
+        }
+    } else if has_token {
+        println!("  ↳ 🛡️ 保持現有 token.gpg 不變。");
+    }
+
+    println!("\n✨ 配置更新圓滿完成！\n");
 }
 
-// 🔐 動態提領 Token
 fn get_github_token(verbose: bool) -> Result<String, String> {
     let note_dir = GameConfig::get_note_dir();
     let token_path = note_dir.join("token.gpg");
@@ -143,11 +165,27 @@ fn main() {
 
     let verbose = args.iter().any(|arg| arg == "-v" || arg == "-vv" || arg == "--verbose");
 
+    // ✨ 1. 單獨快速修改目錄：a --set-dir [路徑] 或 a -dir [路徑]
+    if args.len() > 1 && (args[1] == "--set-dir" || args[1] == "-dir" || args[1] == "--dir") {
+        if args.len() < 3 {
+            println!("❌ 錯誤：請提供目標目錄路徑。範例: a --set-dir ~/MyNotes");
+            return;
+        }
+        let target_dir = &args[2];
+        match GameConfig::set_persistent_dir(target_dir) {
+            Ok(p) => println!("✨ 筆記存儲目錄已成功切換為: {:?}", p),
+            Err(e) => println!("❌ 切換目錄失敗: {}", e),
+        }
+        return;
+    }
+
+    // ✨ 2. 手動觸發配置精靈
     if args.len() > 1 && (args[1] == "--init" || args[1] == "-i" || args[1] == "init") {
         run_init_wizard();
         return;
     }
 
+    // ✨ 3. 單獨輸入 a：展示當前環境儀表板與用法指南
     if args.len() < 2 {
         if !GameConfig::is_configured() {
             println!("👋 檢測到系統尚未完成基礎設定，正在啟動初始化引導...");
@@ -155,6 +193,17 @@ fn main() {
             return;
         }
 
+        // 儀表板面板
+        let current_key = GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置".to_string());
+        let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
+        
+        println!("┌────────────────────────────────────────────────────────────┐");
+        println!("│ 🛡️  Cyber-Forge 賽博靈感管家 · 系統儀表板                   │");
+        println!("├────────────────────────────────────────────────────────────┤");
+        println!("│ 📂 存儲目錄 : {:<44} │", note_dir.to_str().unwrap_or(""));
+        println!("│ 🔑 GPG 金鑰 : {:<44} │", current_key);
+        println!("│ 🌐 Gist ID  : {:<44} │", current_gist);
+        println!("└────────────────────────────────────────────────────────────┘");
         println!("用法: a [您的靈感創意/支援多行貼上] #自動解密拼接並整檔公鑰加密");
         println!("      a -a 或 a --all           #解密並列印今年本地筆記");
         println!("      a -a ./[檔案]              #解密並列印【本地檔案】");
@@ -168,11 +217,12 @@ fn main() {
         println!("      a -r1 或 a -r 1           #刪除【倒數第 1 行】");
         println!("      a -r1-100 或 a -r 1-100   #刪除【倒數 1 至 100 行】");
         println!("      a -r [關鍵字]              #刪除包含該關鍵字的所有行");
-        println!("      a --init 或 a -i          #重新啟動互動式初始化引導精靈");
+        println!("      a --set-dir [新路徑]       #【單獨修改】筆記本地存儲目錄");
+        println!("      a --init 或 a -i          #配置引導精靈 (支援 Enter 保留舊值)");
         return;
     }
 
-    // ✨ 1. 查看本地與雲端閱覽
+    // ✨ 4. 查看本地與雲端閱覽
     if args[1] == "-a" || args[1] == "--all" {
         if args.len() == 2 || (args.len() == 3 && verbose) {
             if let Ok(raw_content) = read_note(default_file_str) {
@@ -214,7 +264,7 @@ fn main() {
         return;
     }
 
-    // ✨ 2. 雲端同步
+    // ✨ 5. 雲端同步
     if args[1] == "-s" || args[1] == "--sync" {
         let timer = Instant::now();
         let is_raw = args.iter().any(|arg| arg == "--raw" || arg == "-u");
@@ -310,7 +360,7 @@ fn main() {
         return;
     }
 
-    // ✨ 3. 列出雲端檔案
+    // ✨ 6. 列出雲端檔案
     if args[1] == "-l" || args[1] == "--list" {
         match get_github_token(verbose) {
             Ok(token) => {
@@ -333,7 +383,7 @@ fn main() {
         return;
     }
 
-    // ✨ 4. 核心升級：雲端下載與自動解密還原 (-d / -x / --decrypt)
+    // ✨ 7. 雲端下載與自動解密還原
     if args[1] == "-d" || args[1] == "--download" {
         let should_decrypt = args.iter().any(|arg| arg == "-x" || arg == "--decrypt");
         let raw_target_opt = args.iter().skip(2).find(|&a| a != "-x" && a != "--decrypt" && a != "-v" && a != "-vv" && a != "--verbose");
@@ -343,14 +393,12 @@ fn main() {
             None => current_year.clone(),
         };
 
-        // 智慧判定遠端檔名
         let remote_file_name = if raw_target.len() == 4 && raw_target.chars().all(|c| c.is_ascii_digit()) {
             format!("{}.note.gpg", raw_target)
         } else {
             raw_target.clone()
         };
 
-        // 決定本地落盤檔名：若開啟解密還原 (-x)，自動剝離 .gpg 後綴
         let local_file_name = if should_decrypt && remote_file_name.ends_with(".gpg") {
             remote_file_name.strip_suffix(".gpg").unwrap().to_string()
         } else {
@@ -378,7 +426,6 @@ fn main() {
                                 Err(e) => println!("⚠️  [保密局] 解密還原失敗: {}", e),
                             }
                         } else {
-                            // 未帶 -x，原樣保存密文
                             if fs::write(&target_local_path, &encrypted_content).is_ok() {
                                 println!("✨ 密文包裹已成功下載至本地廠房：{}", target_local_str);
                             } else {
@@ -394,7 +441,7 @@ fn main() {
         return;
     }
 
-    // ✨ 5. 行級刪除
+    // ✨ 8. 行級刪除
     let is_remove_cmd = args[1].starts_with("-r") || args[1] == "--remove";
     if is_remove_cmd {
         let target_expr = if args[1] == "-r" || args[1] == "--remove" {
@@ -521,7 +568,7 @@ fn main() {
         return;
     }
 
-    // ✨ 6. 寫入新筆記
+    // ✨ 9. 寫入新筆記
     let new_note = args[1..].join(" ");
     
     let mut existing_content = String::new();
