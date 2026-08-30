@@ -1,7 +1,7 @@
 // src/main.rs
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write, IsTerminal};
 use std::path::Path;
 use std::time::Instant;
 use chrono::Local;
@@ -30,7 +30,7 @@ fn prompt_input(prompt: &str, default: Option<&str>) -> String {
     }
 }
 
-// 🧙‍♂️ 智慧互動式引導精靈（自動回填現有值，按 Enter 保留）
+// 🧙‍♂️ 智慧互動式引導精靈
 fn run_init_wizard() {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
     println!("║       🛡️  Cyber-Forge 賽博靈感管家 · 配置引導精靈        ║");
@@ -165,7 +165,7 @@ fn main() {
 
     let verbose = args.iter().any(|arg| arg == "-v" || arg == "-vv" || arg == "--verbose");
 
-    // ✨ 1. 單獨快速修改目錄：a --set-dir [路徑] 或 a -dir [路徑]
+    // ✨ 1. 單獨修改目錄：a --set-dir [路徑]
     if args.len() > 1 && (args[1] == "--set-dir" || args[1] == "-dir" || args[1] == "--dir") {
         if args.len() < 3 {
             println!("❌ 錯誤：請提供目標目錄路徑。範例: a --set-dir ~/MyNotes");
@@ -185,45 +185,8 @@ fn main() {
         return;
     }
 
-    // ✨ 3. 單獨輸入 a：展示當前環境儀表板與用法指南
-    if args.len() < 2 {
-        if !GameConfig::is_configured() {
-            println!("👋 檢測到系統尚未完成基礎設定，正在啟動初始化引導...");
-            run_init_wizard();
-            return;
-        }
-
-        // 儀表板面板
-        let current_key = GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置".to_string());
-        let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
-        
-        println!("┌────────────────────────────────────────────────────────────┐");
-        println!("│ 🛡️  Cyber-Forge 賽博靈感管家 · 系統儀表板                   │");
-        println!("├────────────────────────────────────────────────────────────┤");
-        println!("│ 📂 存儲目錄 : {:<44} │", note_dir.to_str().unwrap_or(""));
-        println!("│ 🔑 GPG 金鑰 : {:<44} │", current_key);
-        println!("│ 🌐 Gist ID  : {:<44} │", current_gist);
-        println!("└────────────────────────────────────────────────────────────┘");
-        println!("用法: a [您的靈感創意/支援多行貼上] #自動解密拼接並整檔公鑰加密");
-        println!("      a -a 或 a --all           #解密並列印今年本地筆記");
-        println!("      a -a ./[檔案]              #解密並列印【本地檔案】");
-        println!("      a -a [年份/檔名]           #【直連雲端】即時解密並列印遠端檔案");
-        println!("      a -s 或 a --sync          #推送今年加密筆記至雲端 Gist (-v 檢視細節)");
-        println!("      a -s [檔案路徑]            #【二進位/文字通用】加密推送外部檔案至 Gist");
-        println!("      a -s -u [檔案路徑]         #【明文/不加密】推送純文字檔案至 Gist");
-        println!("      a -l 或 a --list          #列出雲端 Gist 上存有的全部檔案清單");
-        println!("      a -d [年份/檔名]           #下載雲端密文檔至本地 (保留 .gpg 密文)");
-        println!("      a -d [檔名] -x 或 --decrypt #【下載並解密還原】原始檔案 (去 .gpg 後綴)");
-        println!("      a -r1 或 a -r 1           #刪除【倒數第 1 行】");
-        println!("      a -r1-100 或 a -r 1-100   #刪除【倒數 1 至 100 行】");
-        println!("      a -r [關鍵字]              #刪除包含該關鍵字的所有行");
-        println!("      a --set-dir [新路徑]       #【單獨修改】筆記本地存儲目錄");
-        println!("      a --init 或 a -i          #配置引導精靈 (支援 Enter 保留舊值)");
-        return;
-    }
-
-    // ✨ 4. 查看本地與雲端閱覽
-    if args[1] == "-a" || args[1] == "--all" {
+    // ✨ 3. 查看本地與雲端閱覽 (-a / --all)
+    if args.len() > 1 && (args[1] == "-a" || args[1] == "--all") {
         if args.len() == 2 || (args.len() == 3 && verbose) {
             if let Ok(raw_content) = read_note(default_file_str) {
                 print_content_colored(&raw_content);
@@ -264,8 +227,8 @@ fn main() {
         return;
     }
 
-    // ✨ 5. 雲端同步
-    if args[1] == "-s" || args[1] == "--sync" {
+    // ✨ 4. 雲端同步 (-s / --sync)
+    if args.len() > 1 && (args[1] == "-s" || args[1] == "--sync") {
         let timer = Instant::now();
         let is_raw = args.iter().any(|arg| arg == "--raw" || arg == "-u");
         let custom_path_opt = args.iter().skip(2).find(|&arg| arg != "--raw" && arg != "-u" && arg != "-v" && arg != "-vv" && arg != "--verbose");
@@ -360,8 +323,8 @@ fn main() {
         return;
     }
 
-    // ✨ 6. 列出雲端檔案
-    if args[1] == "-l" || args[1] == "--list" {
+    // ✨ 5. 列出雲端檔案 (-l / --list)
+    if args.len() > 1 && (args[1] == "-l" || args[1] == "--list") {
         match get_github_token(verbose) {
             Ok(token) => {
                 println!("📡 [雲端雷達] 正在掃描 GitHub Gist 倉庫物資清單...");
@@ -383,8 +346,8 @@ fn main() {
         return;
     }
 
-    // ✨ 7. 雲端下載與自動解密還原
-    if args[1] == "-d" || args[1] == "--download" {
+    // ✨ 6. 雲端下載與自動解密還原 (-d / -x / --decrypt)
+    if args.len() > 1 && (args[1] == "-d" || args[1] == "--download") {
         let should_decrypt = args.iter().any(|arg| arg == "-x" || arg == "--decrypt");
         let raw_target_opt = args.iter().skip(2).find(|&a| a != "-x" && a != "--decrypt" && a != "-v" && a != "-vv" && a != "--verbose");
         
@@ -441,9 +404,8 @@ fn main() {
         return;
     }
 
-    // ✨ 8. 行級刪除
-    let is_remove_cmd = args[1].starts_with("-r") || args[1] == "--remove";
-    if is_remove_cmd {
+    // ✨ 7. 行級刪除 (-r / --remove)
+    if args.len() > 1 && (args[1].starts_with("-r") || args[1] == "--remove") {
         let target_expr = if args[1] == "-r" || args[1] == "--remove" {
             if args.len() < 3 {
                 println!("❌ 錯誤：請指定要刪除的倒數行號、區間或關鍵字。範例: a -r1, a -r1-5, a -r 買咖啡");
@@ -568,8 +530,57 @@ fn main() {
         return;
     }
 
-    // ✨ 9. 寫入新筆記
-    let new_note = args[1..].join(" ");
+    // 🌟 核心突破：偵測標準輸入是否有「管道（Pipe）」注入資料 (如 cat file | a)
+    let mut piped_input = String::new();
+    let has_pipe = !io::stdin().is_terminal() && io::stdin().read_to_string(&mut piped_input).is_ok() && !piped_input.trim().is_empty();
+
+    // ✨ 8. 無參數且無管道輸入：展示儀表板
+    if args.len() < 2 && !has_pipe {
+        if !GameConfig::is_configured() {
+            println!("👋 檢測到系統尚未完成基礎設定，正在啟動初始化引導...");
+            run_init_wizard();
+            return;
+        }
+
+        let current_key = GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置".to_string());
+        let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
+        
+        println!("┌────────────────────────────────────────────────────────────┐");
+        println!("│ 🛡️  Cyber-Forge 賽博靈感管家 · 系統儀表板                   │");
+        println!("├────────────────────────────────────────────────────────────┤");
+        println!("│ 📂 存儲目錄 : {:<44} │", note_dir.to_str().unwrap_or(""));
+        println!("│ 🔑 GPG 金鑰 : {:<44} │", current_key);
+        println!("│ 🌐 Gist ID  : {:<44} │", current_gist);
+        println!("└────────────────────────────────────────────────────────────┘");
+        println!("用法: a [您的靈感創意/支援多行貼上] #自動解密拼接並整檔公鑰加密");
+        println!("      cat 檔案 | a              #【管道支援】直接吸納字串流並加密追加");
+        println!("      a -a 或 a --all           #解密並列印今年本地筆記");
+        println!("      a -a ./[檔案]              #解密並列印【本地檔案】");
+        println!("      a -a [年份/檔名]           #【直連雲端】即時解密並列印遠端檔案");
+        println!("      a -s 或 a --sync          #推送今年加密筆記至雲端 Gist (-v 檢視細節)");
+        println!("      a -s [檔案路徑]            #【二進位/文字通用】加密推送外部檔案至 Gist");
+        println!("      a -s -u [檔案路徑]         #【明文/不加密】推送純文字檔案至 Gist");
+        println!("      a -l 或 a --list          #列出雲端 Gist 上存有的全部檔案清單");
+        println!("      a -d [年份/檔名]           #下載雲端密文檔至本地 (保留 .gpg 密文)");
+        println!("      a -d [檔名] -x 或 --decrypt #【下載並解密還原】原始檔案 (去 .gpg 後綴)");
+        println!("      a -r1 或 a -r 1           #刪除【倒數第 1 行】");
+        println!("      a -r1-100 或 a -r 1-100   #刪除【倒數 1 至 100 行】");
+        println!("      a -r [關鍵字]              #刪除包含該關鍵字的所有行");
+        println!("      a --set-dir [新路徑]       #【單獨修改】筆記本地存儲目錄");
+        println!("      a --init 或 a -i          #配置引導精靈 (支援 Enter 保留舊值)");
+        return;
+    }
+
+    // ✨ 9. 寫入新筆記（通吃命令列參數與管道文字流）
+    let new_note = if has_pipe {
+        if args.len() > 1 {
+            format!("{}\n{}", args[1..].join(" "), piped_input.trim_end())
+        } else {
+            piped_input.trim_end().to_string()
+        }
+    } else {
+        args[1..].join(" ")
+    };
     
     let mut existing_content = String::new();
     if let Ok(encrypted_old) = read_note(default_file_str) {
@@ -597,7 +608,11 @@ fn main() {
     match encrypt_with_gpg(existing_content.as_bytes(), &gpg_user_id) {
         Ok(new_encrypted_block) => {
             if write_encrypted_note(default_file_str, &new_encrypted_block).is_ok() {
-                println!("✨ 靈感已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！", current_year);
+                if has_pipe {
+                    println!("✨ 管道數據流已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！", current_year);
+                } else {
+                    println!("✨ 靈感已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！", current_year);
+                }
             }
         },
         Err(e) => println!("⚠️ 全局公鑰加密失敗: {}", e),
