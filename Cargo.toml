@@ -3,13 +3,19 @@ name = "a"
 version = "0.0.4"
 edition = "2024"
 
-[dependencies]
-chrono = "0.4.45"
-reqwest = { version = "0.13.4", features = ["blocking", "json"] }
-serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["full"] }
+[lib]
+name = "a"
+path = "src/lib.rs"
 
-# The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# 👈 核心：確保二進位主程式與函式庫 lib 同時共享依賴套件
+[dependencies]
+reqwest = { version = "0.13.4", features = ["blocking", "json"] }
+serde_json = "1.0"
+chrono = "0.4.45"
+tokio = { version = "1.53.1", features = ["full"] }
+
+
