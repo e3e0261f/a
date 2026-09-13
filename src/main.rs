@@ -1,15 +1,19 @@
 // src/main.rs
+use chrono::Local;
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write, IsTerminal};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::Path;
 use std::time::Instant;
-use chrono::Local;
 
 // 🚢 諸侯引渡
-use a::{GameConfig, color::{paint_line, TerminalColor}, storage::{write_encrypted_note, read_note}};
-use a::encrypt::{encrypt_with_gpg, decrypt_with_gpg, decrypt_bytes_with_gpg};
-use a::gist::{sync_to_gist, fetch_from_gist, list_gist_files};
+use a::encrypt::{decrypt_bytes_with_gpg, decrypt_with_gpg, encrypt_with_gpg};
+use a::gist::{fetch_from_gist, list_gist_files, sync_to_gist};
+use a::{
+    GameConfig,
+    color::{TerminalColor, paint_line},
+    storage::{read_note, write_encrypted_note},
+};
 
 fn prompt_input(prompt: &str, default: Option<&str>) -> String {
     if let Some(def) = default {
@@ -46,7 +50,7 @@ fn run_init_wizard() {
         Ok(d) => {
             println!("  ↳ 📂 存儲目錄已錨定: {:?}", d);
             d
-        },
+        }
         Err(e) => {
             println!("  ⚠️ 寫入目錄失敗 ({})，使用原目錄", e);
             current_dir
@@ -56,9 +60,16 @@ fn run_init_wizard() {
     // 2. GPG 金鑰配置
     println!("\n--- [步驟 1/3: GPG 金鑰配置] ---");
     let existing_key = GameConfig::get_gpg_user_id().unwrap_or_default();
-    let key_prompt_default = if existing_key.is_empty() { None } else { Some(existing_key.as_str()) };
-    let key_id = prompt_input("請輸入 GPG 金鑰標識 (指紋/子金鑰ID/郵箱)", key_prompt_default);
-    
+    let key_prompt_default = if existing_key.is_empty() {
+        None
+    } else {
+        Some(existing_key.as_str())
+    };
+    let key_id = prompt_input(
+        "請輸入 GPG 金鑰標識 (指紋/子金鑰ID/郵箱)",
+        key_prompt_default,
+    );
+
     if !key_id.is_empty() {
         let key_file = note_dir.join("key_id");
         let _ = fs::write(&key_file, &key_id);
@@ -68,29 +79,47 @@ fn run_init_wizard() {
     // 3. Gist ID 配置
     println!("\n--- [步驟 2/3: 雲端 Gist 倉庫配置] ---");
     let existing_gist = GameConfig::get_gist_id().unwrap_or_default();
-    let gist_prompt_default = if existing_gist.is_empty() { None } else { Some(existing_gist.as_str()) };
+    let gist_prompt_default = if existing_gist.is_empty() {
+        None
+    } else {
+        Some(existing_gist.as_str())
+    };
     let raw_gist = prompt_input("請輸入 Gist ID 或 URL", gist_prompt_default);
     let clean_gist_id = GameConfig::extract_clean_id(&raw_gist);
 
     if !clean_gist_id.is_empty() {
         let gist_file = note_dir.join("gist_id");
         let _ = fs::write(&gist_file, &clean_gist_id);
-        println!("  ↳ 🌐 Gist ID [{}] 已保存至: {:?}", clean_gist_id, gist_file);
+        println!(
+            "  ↳ 🌐 Gist ID [{}] 已保存至: {:?}",
+            clean_gist_id, gist_file
+        );
     }
 
     // 4. Token 憑證配置
     println!("\n--- [步驟 3/3: GitHub Token 憑證加密] ---");
     let token_file = note_dir.join("token.gpg");
     let has_token = token_file.exists();
-    let token_default = if has_token { Some("保留現有加密憑證") } else { None };
+    let token_default = if has_token {
+        Some("保留現有加密憑證")
+    } else {
+        None
+    };
     let token_input = prompt_input("請輸入 GitHub Personal Access Token", token_default);
 
     if token_input != "保留現有加密憑證" && !token_input.is_empty() {
-        let active_key = if !key_id.is_empty() { key_id } else { existing_key };
+        let active_key = if !key_id.is_empty() {
+            key_id
+        } else {
+            existing_key
+        };
         if active_key.is_empty() {
             println!("  ❌ 錯誤：未指定 GPG 金鑰，無法加密 Token");
         } else {
-            print!("  ↳ 🔐 正在調用 GPG 密鑰 [{}] 封裝 token.gpg...", active_key);
+            print!(
+                "  ↳ 🔐 正在調用 GPG 密鑰 [{}] 封裝 token.gpg...",
+                active_key
+            );
             io::stdout().flush().unwrap();
             match encrypt_with_gpg(token_input.as_bytes(), &active_key) {
                 Ok(encrypted_token) => {
@@ -98,7 +127,7 @@ fn run_init_wizard() {
                         println!(" [成功]");
                         println!("  ↳ 🛡️ 憑證已安全加密落盤: {:?}", token_file);
                     }
-                },
+                }
                 Err(e) => println!(" [失敗: {}]", e),
             }
         }
@@ -112,17 +141,21 @@ fn run_init_wizard() {
 fn get_github_token(verbose: bool) -> Result<String, String> {
     let note_dir = GameConfig::get_note_dir();
     let token_path = note_dir.join("token.gpg");
-    
+
     if verbose {
         println!("  🔑 [憑證] 正在讀取並解密本地 Token: {:?}", token_path);
     }
 
-    let encrypted_token = fs::read_to_string(&token_path)
-        .map_err(|e| format!("無法讀取加密 Token 檔 ({:?}): 請先執行 'a --init' 初始化 (底層錯誤: {})", token_path, e))?;
-    
+    let encrypted_token = fs::read_to_string(&token_path).map_err(|e| {
+        format!(
+            "無法讀取加密 Token 檔 ({:?}): 請先執行 'a --init' 初始化 (底層錯誤: {})",
+            token_path, e
+        )
+    })?;
+
     let decrypted_token = decrypt_with_gpg(&encrypted_token)
         .map_err(|e| format!("解密 Token 失敗（請確認 GPG 私鑰已解鎖）: {}", e))?;
-    
+
     let token = decrypted_token.trim().to_string();
     if token.is_empty() {
         Err("解密後的 Token 內容為空".to_string())
@@ -163,7 +196,9 @@ fn main() {
     let default_file_path = note_dir.join(format!("{}.note.gpg", current_year));
     let default_file_str = default_file_path.to_str().unwrap();
 
-    let verbose = args.iter().any(|arg| arg == "-v" || arg == "-vv" || arg == "--verbose");
+    let verbose = args
+        .iter()
+        .any(|arg| arg == "-v" || arg == "-vv" || arg == "--verbose");
 
     // ✨ 1. 單獨修改目錄：a --set-dir [路徑]
     if args.len() > 1 && (args[1] == "--set-dir" || args[1] == "-dir" || args[1] == "--dir") {
@@ -194,9 +229,16 @@ fn main() {
                 println!("📂 今年本地還沒有任何靈感記錄哦！");
             }
         } else {
-            let target_input = args.iter().skip(2).find(|&a| a != "-v" && a != "-vv" && a != "--verbose").unwrap();
+            let target_input = args
+                .iter()
+                .skip(2)
+                .find(|&a| a != "-v" && a != "-vv" && a != "--verbose")
+                .unwrap();
 
-            if target_input.starts_with("./") || target_input.starts_with("../") || target_input.starts_with("/") {
+            if target_input.starts_with("./")
+                || target_input.starts_with("../")
+                || target_input.starts_with("/")
+            {
                 let local_path = Path::new(target_input);
                 if let Ok(raw_content) = fs::read_to_string(local_path) {
                     print_content_colored(&raw_content);
@@ -204,7 +246,9 @@ fn main() {
                     println!("📂 本地找不到指定的檔案或為非純文字檔案：{}", target_input);
                 }
             } else {
-                let remote_filename = if target_input.len() == 4 && target_input.chars().all(|c| c.is_ascii_digit()) {
+                let remote_filename = if target_input.len() == 4
+                    && target_input.chars().all(|c| c.is_ascii_digit())
+                {
                     format!("{}.note.gpg", target_input)
                 } else {
                     target_input.clone()
@@ -212,14 +256,17 @@ fn main() {
 
                 match get_github_token(verbose) {
                     Ok(token) => {
-                        println!("☁️  [雲端雷達] 正在從 Gist 即時串流獲取【{}】...", remote_filename);
+                        println!(
+                            "☁️  [雲端雷達] 正在從 Gist 即時串流獲取【{}】...",
+                            remote_filename
+                        );
                         match fetch_from_gist(&remote_filename, &token, verbose) {
                             Ok(remote_content) => {
                                 print_content_colored(&remote_content);
-                            },
+                            }
                             Err(e) => println!("⚠️ 雲端獲取失敗: {}", e),
                         }
-                    },
+                    }
                     Err(e) => println!("❌ 錯誤：{}", e),
                 }
             }
@@ -231,7 +278,9 @@ fn main() {
     if args.len() > 1 && (args[1] == "-s" || args[1] == "--sync") {
         let timer = Instant::now();
         let is_raw = args.iter().any(|arg| arg == "--raw" || arg == "-u");
-        let custom_path_opt = args.iter().skip(2).find(|&arg| arg != "--raw" && arg != "-u" && arg != "-v" && arg != "-vv" && arg != "--verbose");
+        let custom_path_opt = args.iter().skip(2).find(|&arg| {
+            arg != "--raw" && arg != "-u" && arg != "-v" && arg != "-vv" && arg != "--verbose"
+        });
 
         let (payload_to_send, remote_filename) = if let Some(custom_path) = custom_path_opt {
             let path_obj = Path::new(custom_path);
@@ -244,9 +293,13 @@ fn main() {
             println!("📦 [1/4 讀取] 正在讀取本地檔案【{}】...", custom_path);
             let custom_bytes = match fs::read(custom_path) {
                 Ok(bytes) => {
-                    println!("  ↳ 檔案讀取完畢，原始大小: {:.2} KB ({} Bytes)", bytes.len() as f64 / 1024.0, bytes.len());
+                    println!(
+                        "  ↳ 檔案讀取完畢，原始大小: {:.2} KB ({} Bytes)",
+                        bytes.len() as f64 / 1024.0,
+                        bytes.len()
+                    );
                     bytes
-                },
+                }
                 Err(e) => {
                     println!("❌ 讀取自訂檔案失敗: {}", e);
                     return;
@@ -263,9 +316,11 @@ fn main() {
                     Ok(valid_text) => {
                         println!("📄 [2/4 模式] 以【明文直傳】模式打包【{}】...", file_stem);
                         (valid_text, file_stem.to_string())
-                    },
+                    }
                     Err(_) => {
-                        println!("❌ 錯誤：該二進位檔案包含非 UTF-8 資料，無法以明文模式傳輸至 Gist。請去除 -u 旗標以 GPG 加密模式上傳！");
+                        println!(
+                            "❌ 錯誤：該二進位檔案包含非 UTF-8 資料，無法以明文模式傳輸至 Gist。請去除 -u 旗標以 GPG 加密模式上傳！"
+                        );
                         return;
                     }
                 }
@@ -278,13 +333,20 @@ fn main() {
                     }
                 };
 
-                println!("🔐 [2/4 加密] 正在調用 GPG (密鑰: {}) 封裝為 ASCII Armor 密文...", gpg_user_id);
+                println!(
+                    "🔐 [2/4 加密] 正在調用 GPG (密鑰: {}) 封裝為 ASCII Armor 密文...",
+                    gpg_user_id
+                );
                 let gpg_start = Instant::now();
                 let encrypted = match encrypt_with_gpg(&custom_bytes, &gpg_user_id) {
                     Ok(c) => {
-                        println!("  ↳ GPG 封裝完成，耗時: {:?}，密文體積: {:.2} KB", gpg_start.elapsed(), c.len() as f64 / 1024.0);
+                        println!(
+                            "  ↳ GPG 封裝完成，耗時: {:?}，密文體積: {:.2} KB",
+                            gpg_start.elapsed(),
+                            c.len() as f64 / 1024.0
+                        );
                         c
-                    },
+                    }
                     Err(e) => {
                         println!("⚠️ 加密外部檔案失敗: {}", e);
                         return;
@@ -294,12 +356,18 @@ fn main() {
                 (encrypted, remote_name)
             }
         } else {
-            println!("📦 [1/4 讀取] 正在讀取本地年度筆記【{}】...", default_file_str);
+            println!(
+                "📦 [1/4 讀取] 正在讀取本地年度筆記【{}】...",
+                default_file_str
+            );
             let encrypted_content = match read_note(default_file_str) {
                 Ok(content) => {
-                    println!("  ↳ 本地密文包裹讀取完畢 (體積: {:.2} KB)", content.len() as f64 / 1024.0);
+                    println!(
+                        "  ↳ 本地密文包裹讀取完畢 (體積: {:.2} KB)",
+                        content.len() as f64 / 1024.0
+                    );
                     content
-                },
+                }
                 Err(_) => {
                     println!("📂 本地空空如也，沒有什麼好同步的。");
                     return;
@@ -312,12 +380,15 @@ fn main() {
         println!("🔑 [3/4 提領] 正在取得通行證並校驗授權...");
         match get_github_token(verbose) {
             Ok(token) => {
-                println!("🚀 [4/4 出海] 正在向 GitHub Gist 發射【{}】(超時保護: 30s)...", remote_filename);
+                println!(
+                    "🚀 [4/4 出海] 正在向 GitHub Gist 發射【{}】(超時保護: 30s)...",
+                    remote_filename
+                );
                 match sync_to_gist(&payload_to_send, &remote_filename, &token, verbose) {
                     Ok(_) => println!("☁️  [GitHub] 同步成功！全流程總耗時: {:?}", timer.elapsed()),
                     Err(e) => println!("⚠️  [GitHub] 傳輸失敗: {}", e),
                 }
-            },
+            }
             Err(e) => println!("❌ 錯誤：{}", e),
         }
         return;
@@ -336,11 +407,13 @@ fn main() {
                             paint_line(&format!("📦 {}", file), TerminalColor::Cyan);
                         }
                         println!("------------------------------------");
-                        println!("💡 可使用 'a -d [檔名]' 下載，或 'a -d [檔名] -x' 下載並解密還原。");
-                    },
+                        println!(
+                            "💡 可使用 'a -d [檔名]' 下載，或 'a -d [檔名] -x' 下載並解密還原。"
+                        );
+                    }
                     Err(e) => println!("⚠️ 獲取清單失敗: {}", e),
                 }
-            },
+            }
             Err(e) => println!("❌ 錯誤：{}", e),
         }
         return;
@@ -349,18 +422,21 @@ fn main() {
     // ✨ 6. 雲端下載與自動解密還原 (-d / -x / --decrypt)
     if args.len() > 1 && (args[1] == "-d" || args[1] == "--download") {
         let should_decrypt = args.iter().any(|arg| arg == "-x" || arg == "--decrypt");
-        let raw_target_opt = args.iter().skip(2).find(|&a| a != "-x" && a != "--decrypt" && a != "-v" && a != "-vv" && a != "--verbose");
-        
+        let raw_target_opt = args.iter().skip(2).find(|&a| {
+            a != "-x" && a != "--decrypt" && a != "-v" && a != "-vv" && a != "--verbose"
+        });
+
         let raw_target = match raw_target_opt {
             Some(t) => t.clone(),
             None => current_year.clone(),
         };
 
-        let remote_file_name = if raw_target.len() == 4 && raw_target.chars().all(|c| c.is_ascii_digit()) {
-            format!("{}.note.gpg", raw_target)
-        } else {
-            raw_target.clone()
-        };
+        let remote_file_name =
+            if raw_target.len() == 4 && raw_target.chars().all(|c| c.is_ascii_digit()) {
+                format!("{}.note.gpg", raw_target)
+            } else {
+                raw_target.clone()
+            };
 
         let local_file_name = if should_decrypt && remote_file_name.ends_with(".gpg") {
             remote_file_name.strip_suffix(".gpg").unwrap().to_string()
@@ -381,11 +457,15 @@ fn main() {
                             match decrypt_bytes_with_gpg(&encrypted_content) {
                                 Ok(decrypted_bytes) => {
                                     if fs::write(&target_local_path, &decrypted_bytes).is_ok() {
-                                        println!("✨ 原始實體已成功破甲還原至本地：{} (大小: {:.2} KB)", target_local_str, decrypted_bytes.len() as f64 / 1024.0);
+                                        println!(
+                                            "✨ 原始實體已成功破甲還原至本地：{} (大小: {:.2} KB)",
+                                            target_local_str,
+                                            decrypted_bytes.len() as f64 / 1024.0
+                                        );
                                     } else {
                                         println!("⚠️ 寫入本地磁碟失敗");
                                     }
-                                },
+                                }
                                 Err(e) => println!("⚠️  [保密局] 解密還原失敗: {}", e),
                             }
                         } else {
@@ -395,10 +475,10 @@ fn main() {
                                 println!("⚠️ 寫入本地磁碟失敗");
                             }
                         }
-                    },
+                    }
                     Err(e) => println!("⚠️ 下載失敗: {}", e),
                 }
-            },
+            }
             Err(e) => println!("❌ 錯誤：{}", e),
         }
         return;
@@ -408,7 +488,9 @@ fn main() {
     if args.len() > 1 && (args[1].starts_with("-r") || args[1] == "--remove") {
         let target_expr = if args[1] == "-r" || args[1] == "--remove" {
             if args.len() < 3 {
-                println!("❌ 錯誤：請指定要刪除的倒數行號、區間或關鍵字。範例: a -r1, a -r1-5, a -r 買咖啡");
+                println!(
+                    "❌ 錯誤：請指定要刪除的倒數行號、區間或關鍵字。範例: a -r1, a -r1-5, a -r 買咖啡"
+                );
                 return;
             }
             args[2].clone()
@@ -442,7 +524,9 @@ fn main() {
 
         let is_range = target_expr.contains('-') && {
             let parts: Vec<&str> = target_expr.split('-').collect();
-            parts.len() == 2 && parts[0].parse::<usize>().is_ok() && parts[1].parse::<usize>().is_ok()
+            parts.len() == 2
+                && parts[0].parse::<usize>().is_ok()
+                && parts[1].parse::<usize>().is_ok()
         };
 
         let single_num_opt = target_expr.parse::<usize>().ok();
@@ -452,14 +536,22 @@ fn main() {
             let start = parts[0].parse::<usize>().unwrap();
             let end = parts[1].parse::<usize>().unwrap();
 
-            let (min_k, max_k) = if start <= end { (start, end) } else { (end, start) };
+            let (min_k, max_k) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
 
             if min_k == 0 {
                 println!("❌ 錯誤：倒數行號從 1 開始計算（1 為最新一行）。");
                 return;
             }
 
-            let start_idx = if max_k >= total_lines { 0 } else { total_lines - max_k };
+            let start_idx = if max_k >= total_lines {
+                0
+            } else {
+                total_lines - max_k
+            };
             let end_idx = if min_k > total_lines {
                 0
             } else {
@@ -469,9 +561,15 @@ fn main() {
             if start_idx <= end_idx && start_idx < total_lines {
                 let remove_count = (end_idx - start_idx + 1).min(total_lines);
                 lines.drain(start_idx..=end_idx);
-                println!("✨ 已成功刪除倒數 {} 至 {} 行（共刪除 {} 行）！", min_k, max_k, remove_count);
+                println!(
+                    "✨ 已成功刪除倒數 {} 至 {} 行（共刪除 {} 行）！",
+                    min_k, max_k, remove_count
+                );
             } else {
-                println!("⚠️ 指定的倒數區間超出筆記總行數（目前共 {} 行）。", total_lines);
+                println!(
+                    "⚠️ 指定的倒數區間超出筆記總行數（目前共 {} 行）。",
+                    total_lines
+                );
                 return;
             }
         } else if let Some(k) = single_num_opt {
@@ -506,7 +604,10 @@ fn main() {
             }
 
             lines = new_lines;
-            println!("✨ 已成功刪除 {} 行包含「{}」的記錄！", removed_count, keyword);
+            println!(
+                "✨ 已成功刪除 {} 行包含「{}」的記錄！",
+                removed_count, keyword
+            );
         }
 
         let new_content = lines.join("\n");
@@ -524,7 +625,7 @@ fn main() {
                 if write_encrypted_note(default_file_str, &new_encrypted_block).is_ok() {
                     println!("🔒 已完成本地單一密文封存。");
                 }
-            },
+            }
             Err(e) => println!("⚠️ 全局公鑰加密失敗: {}", e),
         }
         return;
@@ -532,7 +633,9 @@ fn main() {
 
     // 🌟 核心突破：偵測標準輸入是否有「管道（Pipe）」注入資料 (如 cat file | a)
     let mut piped_input = String::new();
-    let has_pipe = !io::stdin().is_terminal() && io::stdin().read_to_string(&mut piped_input).is_ok() && !piped_input.trim().is_empty();
+    let has_pipe = !io::stdin().is_terminal()
+        && io::stdin().read_to_string(&mut piped_input).is_ok()
+        && !piped_input.trim().is_empty();
 
     // ✨ 8. 無參數且無管道輸入：展示儀表板
     if args.len() < 2 && !has_pipe {
@@ -544,7 +647,7 @@ fn main() {
 
         let current_key = GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置".to_string());
         let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
-        
+
         println!("┌────────────────────────────────────────────────────────────┐");
         println!("│ 🛡️  Cyber-Forge 賽博靈感管家 · 系統儀表板                   │");
         println!("├────────────────────────────────────────────────────────────┤");
@@ -581,7 +684,7 @@ fn main() {
     } else {
         args[1..].join(" ")
     };
-    
+
     let mut existing_content = String::new();
     if let Ok(encrypted_old) = read_note(default_file_str) {
         if let Ok(decrypted_old) = decrypt_with_gpg(&encrypted_old) {
@@ -609,12 +712,18 @@ fn main() {
         Ok(new_encrypted_block) => {
             if write_encrypted_note(default_file_str, &new_encrypted_block).is_ok() {
                 if has_pipe {
-                    println!("✨ 管道數據流已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！", current_year);
+                    println!(
+                        "✨ 管道數據流已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！",
+                        current_year
+                    );
                 } else {
-                    println!("✨ 靈感已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！", current_year);
+                    println!(
+                        "✨ 靈感已安全縫合並以【單一GPG密文包裹】加密封存於本地 {} 廠房！",
+                        current_year
+                    );
                 }
             }
-        },
+        }
         Err(e) => println!("⚠️ 全局公鑰加密失敗: {}", e),
     }
 }
