@@ -1,0 +1,8 @@
+{
+  "name": "Cyber-NOte",
+  "description": "鎖定 GPG 金鑰隔離架構的嚴格機密筆記、多層巢狀加密與金鑰歸檔簿審計系統 (Project a)",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

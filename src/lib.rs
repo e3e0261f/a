@@ -7,23 +7,39 @@ pub mod color;
 pub mod storage;
 pub mod gist;
 pub mod encrypt;
+pub mod ledger;
 
 pub struct GameConfig;
 
 impl GameConfig {
     pub const GIST_BASE_API: &'static str = "https://api.github.com/gists";
 
-    // 獲取應用程式全局設定目錄 (~/.config/a)
+    // 獲取應用程式全局設定目錄 (~/.config/cyber-note 或 ~/.config/a)
     pub fn get_app_config_dir() -> PathBuf {
         let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let config_dir = PathBuf::from(home).join(".config").join("a");
+        let config_dir = PathBuf::from(&home).join(".config").join("cyber-note");
         if !config_dir.exists() {
             let _ = fs::create_dir_all(&config_dir);
         }
         config_dir
     }
 
-    // 📂 動態獲取筆記目錄 (支援: 1.環境變數 > 2.常駐設定 ~/.config/a/dir > 3.預設 ~/BOok/NOte)
+    // 🛡️ 隱私數據隔離目錄 (~/.config/cyber-note/secrets)
+    // 專門存儲 token.gpg 等機密憑證，嚴禁明文落盤，目錄權限設為 0700
+    pub fn get_secrets_dir() -> PathBuf {
+        let secrets_dir = Self::get_app_config_dir().join("secrets");
+        if !secrets_dir.exists() {
+            let _ = fs::create_dir_all(&secrets_dir);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&secrets_dir, fs::Permissions::from_mode(0o700));
+            }
+        }
+        secrets_dir
+    }
+
+    // 📂 動態獲取筆記目錄 (符合 Linux FHS / XDG 規範，每台 Linux 均預設存在的標準目錄: ~/.local/share/cyber-note/notes)
     pub fn get_note_dir() -> PathBuf {
         if let Ok(custom) = env::var("A_NOTE_DIR") {
             return Self::expand_tilde(&custom);
@@ -42,8 +58,29 @@ impl GameConfig {
             }
         }
 
+        // 亦檢查舊版 config 目錄中的 dir
+        let legacy_dir_file = PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+            .join(".config")
+            .join("a")
+            .join("dir");
+        if let Ok(content) = fs::read_to_string(&legacy_dir_file) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                let p = Self::expand_tilde(trimmed);
+                if !p.exists() {
+                    let _ = fs::create_dir_all(&p);
+                }
+                return p;
+            }
+        }
+
+        // Linux 標準 XDG 資料目錄: ~/.local/share/cyber-note/notes
         let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let dir = PathBuf::from(home).join("BOok").join("NOte");
+        let dir = PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("cyber-note")
+            .join("notes");
 
         if !dir.exists() {
             let _ = fs::create_dir_all(&dir);
@@ -77,11 +114,12 @@ impl GameConfig {
         }
     }
 
-    // 🔑 動態提領 GPG 金鑰指紋
+    // 🔑 動態提領並驗證 GPG 金鑰指紋（嚴格禁止 SSH 金鑰）
     pub fn get_gpg_user_id() -> Result<String, String> {
         if let Ok(val) = env::var("A_GPG_KEY") {
             let trimmed = val.trim().to_string();
             if !trimmed.is_empty() {
+                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
                 return Ok(trimmed);
             }
         }
@@ -91,11 +129,12 @@ impl GameConfig {
         if let Ok(content) = fs::read_to_string(&key_file) {
             let trimmed = content.trim().to_string();
             if !trimmed.is_empty() {
+                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
                 return Ok(trimmed);
             }
         }
 
-        Err("未配置 GPG 金鑰指紋，請執行 'a --init' 進行配置。".to_string())
+        Err("未配置 GPG 金鑰，請執行 'a --init' 進行配置。".to_string())
     }
 
     // 🌐 動態提領 Gist ID 並組裝標準 API 網址

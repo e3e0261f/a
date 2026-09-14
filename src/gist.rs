@@ -152,3 +152,181 @@ pub fn list_gist_files(token: &str, verbose: bool) -> Result<Vec<String>, String
         },
     }
 }
+
+// 🚀 創建全新 Gist 倉庫以完全銷毀、抹除既有修改歷史記錄 (Clean Slate History Purge)
+pub fn create_clean_slate_gist(
+    files: &std::collections::HashMap<String, String>,
+    description: &str,
+    token: &str,
+    is_public: bool,
+    verbose: bool,
+) -> Result<String, String> {
+    let client = build_client();
+    let url = GameConfig::GIST_BASE_API;
+
+    if verbose {
+        println!("  📡 [網路] 正在向 {} 發起 POST 請求建立全新乾淨倉庫 (抹除歷史記錄)...", url);
+    }
+
+    let mut files_map = serde_json::Map::new();
+    for (name, content) in files {
+        files_map.insert(name.clone(), json!({ "content": content }));
+    }
+
+    // 若為空，放置一個合規的占位索引檔案
+    if files_map.is_empty() {
+        files_map.insert(
+            "cyber_note_vault.manifest".to_string(),
+            json!({ "content": "Cyber-NOte 乾淨無痕加密保險庫已初始化 (修訂歷史已抹除)" }),
+        );
+    }
+
+    let body = json!({
+        "description": description,
+        "public": is_public,
+        "files": files_map
+    });
+
+    let response = client.post(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&body)
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if !status.is_success() {
+                let text = res.text().unwrap_or_default();
+                return Err(format!("❌ 建立新 Gist 倉庫失敗，狀態碼: {} (詳情: {})", status, text));
+            }
+
+            let text = res.text().map_err(|e| e.to_string())?;
+            let json_val: Value = serde_json::from_str(&text).map_err(|e| format!("解析 JSON 失敗: {}", e))?;
+            if let Some(new_id) = json_val["id"].as_str() {
+                Ok(new_id.to_string())
+            } else {
+                Err("❌ 雲端未回傳有效的 Gist ID".to_string())
+            }
+        }
+        Err(e) => Err(format!("❌ 連線 GitHub API 失敗: {}", e)),
+    }
+}
+
+// 🗑️ 完全銷毀舊版 Gist 倉庫
+pub fn delete_gist(gist_id: &str, token: &str, verbose: bool) -> Result<(), String> {
+    let client = build_client();
+    let url = format!("{}/{}", GameConfig::GIST_BASE_API, gist_id);
+
+    if verbose {
+        println!("  🗑️  [網路] 正在向 {} 發送 DELETE 請求銷毀舊倉庫...", url);
+    }
+
+    let response = client.delete(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if status.is_success() || status.as_u16() == 204 {
+                Ok(())
+            } else {
+                Err(format!("❌ 銷毀舊倉庫失敗，狀態碼: {}", status))
+            }
+        }
+        Err(e) => Err(format!("❌ 發送刪除請求失敗: {}", e)),
+    }
+}
+
+// 🔄 遠端 Gist 檔案原子套殼替換（發佈 new_file，並於遠端刪除 old_file）
+pub fn atomic_replace_gist_file(
+    old_file: Option<&str>,
+    new_file: &str,
+    new_content: &str,
+    token: &str,
+    verbose: bool,
+) -> Result<(), String> {
+    let client = build_client();
+    let url = GameConfig::get_gist_url()?;
+
+    if verbose {
+        println!("  📡 [網路] 正在向 {} 發起原子套殼替換請求...", url);
+        if let Some(old) = old_file {
+            println!("  🗑️  將自遠端刪除原始檔案: {}，並發佈新密文檔案: {}", old, new_file);
+        } else {
+            println!("  📤 發佈新檔案: {}", new_file);
+        }
+    }
+
+    let mut files_map = serde_json::Map::new();
+    files_map.insert(new_file.to_string(), json!({ "content": new_content }));
+    if let Some(old) = old_file {
+        if old != new_file {
+            files_map.insert(old.to_string(), Value::Null);
+        }
+    }
+
+    let body = json!({
+        "files": files_map
+    });
+
+    let response = client.patch(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&body)
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if status.is_success() {
+                Ok(())
+            } else {
+                let text = res.text().unwrap_or_default();
+                Err(format!("❌ 遠端檔案替換失敗，狀態碼: {} (詳情: {})", status, text))
+            }
+        }
+        Err(e) => Err(format!("❌ 連線 GitHub API 失敗: {}", e)),
+    }
+}
+
+// 🗑️ 刪除 Gist 中的指定檔案
+pub fn delete_gist_file(file_name: &str, token: &str, verbose: bool) -> Result<(), String> {
+    let client = build_client();
+    let url = GameConfig::get_gist_url()?;
+
+    if verbose {
+        println!("  🗑️  [網路] 正在向 {} 請求刪除檔案 {}...", url, file_name);
+    }
+
+    let body = json!({
+        "files": {
+            file_name: Value::Null
+        }
+    });
+
+    let response = client.patch(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&body)
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if status.is_success() {
+                Ok(())
+            } else {
+                let text = res.text().unwrap_or_default();
+                Err(format!("❌ 刪除雲端檔案失敗，狀態碼: {} (詳情: {})", status, text))
+            }
+        }
+        Err(e) => Err(format!("❌ 發送刪除請求失敗: {}", e)),
+    }
+}
