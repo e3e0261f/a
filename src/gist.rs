@@ -168,29 +168,29 @@ pub fn create_clean_slate_gist(
         println!("  📡 [網路] 正在向 {} 發起 POST 請求建立全新乾淨倉庫 (抹除歷史記錄)...", url);
     }
 
-    let mut files_map = serde_json::Map::new();
+    let mut files_obj = serde_json::Map::new();
     for (name, content) in files {
-        files_map.insert(
-            name.clone(),
-            json!({ "content": content }),
-        );
+        let mut file_inner = serde_json::Map::new();
+        file_inner.insert("content".to_string(), Value::String(content.clone()));
+        files_obj.insert(name.clone(), Value::Object(file_inner));
     }
 
     // 若為空，放置一個合規的占位索引檔案
-    if files_map.is_empty() {
-        files_map.insert(
-            "cyber_note_vault.manifest".to_string(),
-            json!({
-                "content": "Cyber-NOte 乾淨無痕加密保險庫已初始化 (修訂歷史已抹除)"
-            }),
+    if files_obj.is_empty() {
+        let mut file_inner = serde_json::Map::new();
+        file_inner.insert(
+            "content".to_string(),
+            Value::String("Cyber-NOte 乾淨無痕加密保險庫已初始化 (修訂歷史已抹除)".to_string()),
         );
+        files_obj.insert("cyber_note_vault.manifest".to_string(), Value::Object(file_inner));
     }
 
-    let body = json!({
-        "description": description,
-        "public": is_public,
-        "files": files_map
-    });
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("description".to_string(), Value::String(description.to_string()));
+    body_map.insert("public".to_string(), Value::Bool(is_public));
+    body_map.insert("files".to_string(), Value::Object(files_obj));
+
+    let body = Value::Object(body_map);
 
     let response = client.post(url)
         .header("Authorization", format!("Bearer {}", token))
@@ -267,17 +267,20 @@ pub fn atomic_replace_gist_file(
         }
     }
 
-    let mut files_map = serde_json::Map::new();
-    files_map.insert(new_file.to_string(), json!({ "content": new_content }));
+    let mut files_obj = serde_json::Map::new();
+    let mut new_inner = serde_json::Map::new();
+    new_inner.insert("content".to_string(), Value::String(new_content.to_string()));
+    files_obj.insert(new_file.to_string(), Value::Object(new_inner));
+
     if let Some(old) = old_file {
         if old != new_file {
-            files_map.insert(old.to_string(), Value::Null);
+            files_obj.insert(old.to_string(), Value::Null);
         }
     }
 
-    let body = json!({
-        "files": files_map
-    });
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("files".to_string(), Value::Object(files_obj));
+    let body = Value::Object(body_map);
 
     let response = client.patch(&url)
         .header("Authorization", format!("Bearer {}", token))
@@ -309,11 +312,11 @@ pub fn delete_gist_file(file_name: &str, token: &str, verbose: bool) -> Result<(
         println!("  🗑️  [網路] 正在向 {} 請求刪除檔案 {}...", url, file_name);
     }
 
-    let body = json!({
-        "files": {
-            file_name: Value::Null
-        }
-    });
+    let mut files_obj = serde_json::Map::new();
+    files_obj.insert(file_name.to_string(), Value::Null);
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("files".to_string(), Value::Object(files_obj));
+    let body = Value::Object(body_map);
 
     let response = client.patch(&url)
         .header("Authorization", format!("Bearer {}", token))
