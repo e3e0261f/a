@@ -168,22 +168,28 @@ pub fn create_clean_slate_gist(
         println!("  📡 [網路] 正在向 {} 發起 POST 請求建立全新乾淨倉庫 (抹除歷史記錄)...", url);
     }
 
-    let mut files_json = json!({});
+    let mut files_map = serde_json::Map::new();
     for (name, content) in files {
-        files_json[name] = json!({ "content": content });
+        files_map.insert(
+            name.clone(),
+            json!({ "content": content }),
+        );
     }
 
     // 若為空，放置一個合規的占位索引檔案
-    if files.is_empty() {
-        files_json["cyber_note_vault.manifest"] = json!({
-            "content": "Cyber-NOte 乾淨無痕加密保險庫已初始化 (修訂歷史已抹除)"
-        });
+    if files_map.is_empty() {
+        files_map.insert(
+            "cyber_note_vault.manifest".to_string(),
+            json!({
+                "content": "Cyber-NOte 乾淨無痕加密保險庫已初始化 (修訂歷史已抹除)"
+            }),
+        );
     }
 
     let body = json!({
         "description": description,
         "public": is_public,
-        "files": files_json
+        "files": files_map
     });
 
     let response = client.post(url)

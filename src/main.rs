@@ -256,6 +256,7 @@ fn print_content_colored(raw_content: &str) {
 }
 
 // 📚 Web 管理引擎核心依賴科普與安裝指引
+#[allow(dead_code)]
 fn print_web_dependencies_guide(missing_tsx: bool, missing_express: bool) {
     println!("\n╔══════════════════════════════════════════════════════════════════════╗");
     println!("║         📚 Web 安全管理引擎 · 核心依賴科普與安裝指引                 ║");
@@ -721,7 +722,7 @@ fn handle_http_connection(mut stream: TcpStream) {
     }
 
     if path == "/api/rust/status" {
-        let cfg = GameConfig::read_unified_config();
+        let _cfg = GameConfig::read_unified_config();
         let note_dir = GameConfig::get_note_dir();
         let config_dir = GameConfig::get_app_config_dir();
         let key_id = GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置".to_string());
