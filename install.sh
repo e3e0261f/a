@@ -15,6 +15,7 @@ mkdir -p "$INSTALL_DIR"
 
 echo "📦 正在将二进制作战战舰自动空降到 $INSTALL_DIR/a..."
 cp target/release/a "$INSTALL_DIR/a"
+cp target/release/a ./a
 
 if [ $? -ne 0 ]; then
     echo "❌ [警報] 复制失败！请检查目标路径权限。"
