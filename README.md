@@ -50,6 +50,23 @@ rm token.txt
 code
 Bash
 ./install.sh
+## ❄️ NixOS 100% 原生支援 (Nix Flakes)
+
+專案已 100% 完整適配 NixOS 體系，內建 `flake.nix`、`nixosModules` 與 `homeManagerModules`：
+
+```bash
+# 🎯 免安裝即時運行 CLI
+nix run github:e3e0261f/a -- --help
+
+# 🛠️ 進入純淨開發隔離環境 (自動配置 Rust 2024, GnuPG, OpenSSL, Node)
+nix develop
+
+# 🌐 即時啟動 Web 網頁端後台
+nix run github:e3e0261f/a#web
+```
+
+詳細系統級服務整合與 Home Manager 配置指南請參閱 [NIXOS.md](./NIXOS.md)。
+
 🔒 安全模型與邊界
 公私鑰分離：日常寫入與外部檔案加密僅調用公鑰（零私鑰依賴）；閱覽與行刪除需透過私鑰授權。
 記憶體快取建議：建議於 ~/.gnupg/gpg-agent.conf 設定合適的 default-cache-ttl，兼顧頻繁調用之流暢度與密鑰離線安全。
