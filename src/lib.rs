@@ -2,6 +2,7 @@
 use std::env;
 use std::path::PathBuf;
 use std::fs;
+use serde::{Deserialize, Serialize};
 
 pub mod color;
 pub mod storage;
@@ -9,22 +10,113 @@ pub mod gist;
 pub mod encrypt;
 pub mod ledger;
 
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+pub struct AppUnifiedConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gist_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+}
+
 pub struct GameConfig;
 
 impl GameConfig {
     pub const GIST_BASE_API: &'static str = "https://api.github.com/gists";
 
-    // 獲取應用程式全局設定目錄 (~/.config/cyber-note 或 ~/.config/a)
+    // 獲取應用程式全局設定目錄 (統一收斂至 ~/.local/share/cyber-note)
     pub fn get_app_config_dir() -> PathBuf {
         let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let config_dir = PathBuf::from(&home).join(".config").join("cyber-note");
+        let config_dir = PathBuf::from(&home).join(".local").join("share").join("cyber-note");
         if !config_dir.exists() {
             let _ = fs::create_dir_all(&config_dir);
         }
         config_dir
     }
 
-    // 🛡️ 隱私數據隔離目錄 (~/.config/cyber-note/secrets)
+    // 統一設定檔路徑 (~/.local/share/cyber-note/config.json)
+    pub fn get_unified_config_path() -> PathBuf {
+        Self::get_app_config_dir().join("config.json")
+    }
+
+    // 讀取統一設定檔 (支援從 ~/.local/share/cyber-note/ 及舊目錄 ~/.config/cyber-note 自動無縫遷移)
+    pub fn read_unified_config() -> AppUnifiedConfig {
+        let path = Self::get_unified_config_path();
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(cfg) = serde_json::from_str::<AppUnifiedConfig>(&content) {
+                    return cfg;
+                }
+            }
+        }
+
+        let mut cfg = AppUnifiedConfig::default();
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let local_share = Self::get_app_config_dir();
+        let legacy_config = PathBuf::from(&home).join(".config").join("cyber-note");
+        let legacy_a = PathBuf::from(&home).join(".config").join("a");
+
+        // 遷移讀取 note_dir
+        if let Ok(d) = fs::read_to_string(local_share.join("dir")) {
+            cfg.note_dir = Some(d.trim().to_string());
+        } else if let Ok(d) = fs::read_to_string(legacy_config.join("dir")) {
+            cfg.note_dir = Some(d.trim().to_string());
+        } else if let Ok(d) = fs::read_to_string(legacy_a.join("dir")) {
+            cfg.note_dir = Some(d.trim().to_string());
+        }
+
+        // 遷移讀取 key_id
+        if let Ok(k) = fs::read_to_string(local_share.join("key_id")) {
+            cfg.key_id = Some(k.trim().to_string());
+        } else if let Ok(k) = fs::read_to_string(legacy_config.join("key_id")) {
+            cfg.key_id = Some(k.trim().to_string());
+        } else if let Ok(k) = fs::read_to_string(legacy_a.join("key_id")) {
+            cfg.key_id = Some(k.trim().to_string());
+        }
+
+        // 遷移讀取 gist_id
+        if let Ok(g) = fs::read_to_string(local_share.join("gist_id")) {
+            cfg.gist_id = Some(g.trim().to_string());
+        } else if let Ok(g) = fs::read_to_string(legacy_config.join("gist_id")) {
+            cfg.gist_id = Some(g.trim().to_string());
+        } else if let Ok(g) = fs::read_to_string(legacy_a.join("gist_id")) {
+            cfg.gist_id = Some(g.trim().to_string());
+        }
+
+        cfg
+    }
+
+    // 寫入統一設定檔 (~/.local/share/cyber-note/config.json 與相容檔)
+    pub fn write_unified_config(cfg: &AppUnifiedConfig) -> std::io::Result<()> {
+        let app_dir = Self::get_app_config_dir();
+        let path = app_dir.join("config.json");
+        let content = serde_json::to_string_pretty(cfg)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        fs::write(&path, content)?;
+
+        // 同步寫入單一相容檔，保持與腳本及外部工具完全相容
+        if let Some(ref d) = cfg.note_dir {
+            let _ = fs::write(app_dir.join("dir"), d.trim());
+        }
+        if let Some(ref k) = cfg.key_id {
+            let _ = fs::write(app_dir.join("key_id"), k.trim());
+        }
+        if let Some(ref g) = cfg.gist_id {
+            let _ = fs::write(app_dir.join("gist_id"), g.trim());
+        }
+        Ok(())
+    }
+
+    // 🛡️ 隱私數據隔離目錄 (~/.local/share/cyber-note/secrets)
     // 專門存儲 token.gpg 等機密憑證，嚴禁明文落盤，目錄權限設為 0700
     pub fn get_secrets_dir() -> PathBuf {
         let secrets_dir = Self::get_app_config_dir().join("secrets");
@@ -36,6 +128,20 @@ impl GameConfig {
                 let _ = fs::set_permissions(&secrets_dir, fs::Permissions::from_mode(0o700));
             }
         }
+
+        // 若舊位置存在 token.gpg，自動無縫遷移至新目錄
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let legacy_token = PathBuf::from(&home).join(".config").join("cyber-note").join("secrets").join("token.gpg");
+        let new_token = secrets_dir.join("token.gpg");
+        if legacy_token.exists() && !new_token.exists() {
+            let _ = fs::copy(&legacy_token, &new_token);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&new_token, fs::Permissions::from_mode(0o600));
+            }
+        }
+
         secrets_dir
     }
 
@@ -45,7 +151,20 @@ impl GameConfig {
             return Self::expand_tilde(&custom);
         }
 
-        // 讀取常駐設定檔
+        // 1. 優先從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
+        let unified = Self::read_unified_config();
+        if let Some(ref d) = unified.note_dir {
+            let trimmed = d.trim();
+            if !trimmed.is_empty() {
+                let p = Self::expand_tilde(trimmed);
+                if !p.exists() {
+                    let _ = fs::create_dir_all(&p);
+                }
+                return p;
+            }
+        }
+
+        // 2. 讀取常駐設定檔 (~/.local/share/cyber-note/dir)
         let persistent_dir_file = Self::get_app_config_dir().join("dir");
         if let Ok(content) = fs::read_to_string(&persistent_dir_file) {
             let trimmed = content.trim();
@@ -58,10 +177,10 @@ impl GameConfig {
             }
         }
 
-        // 亦檢查舊版 config 目錄中的 dir
+        // 3. 檢查舊版 config 目錄中的 dir
         let legacy_dir_file = PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".to_string()))
             .join(".config")
-            .join("a")
+            .join("cyber-note")
             .join("dir");
         if let Ok(content) = fs::read_to_string(&legacy_dir_file) {
             let trimmed = content.trim();
@@ -74,7 +193,7 @@ impl GameConfig {
             }
         }
 
-        // Linux 標準 XDG 資料目錄: ~/.local/share/cyber-note/notes
+        // 4. Linux 標準 XDG 資料目錄: ~/.local/share/cyber-note/notes
         let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let dir = PathBuf::from(home)
             .join(".local")
@@ -89,14 +208,19 @@ impl GameConfig {
         dir
     }
 
-    // 💾 單獨持久化寫入新目錄
+    // 💾 單獨持久化寫入新目錄 (同步寫入 ~/.local/share/cyber-note/config.json)
     pub fn set_persistent_dir(new_path: &str) -> std::io::Result<PathBuf> {
         let clean_path = Self::expand_tilde(new_path);
         if !clean_path.exists() {
             fs::create_dir_all(&clean_path)?;
         }
+        let mut unified = Self::read_unified_config();
+        let path_str = clean_path.to_str().unwrap_or(new_path).to_string();
+        unified.note_dir = Some(path_str.clone());
+        let _ = Self::write_unified_config(&unified);
+
         let persistent_dir_file = Self::get_app_config_dir().join("dir");
-        fs::write(&persistent_dir_file, clean_path.to_str().unwrap_or(new_path))?;
+        let _ = fs::write(&persistent_dir_file, &path_str);
         Ok(clean_path)
     }
 
@@ -124,9 +248,41 @@ impl GameConfig {
             }
         }
 
+        // 1. 優先從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
+        let unified = Self::read_unified_config();
+        if let Some(ref k) = unified.key_id {
+            let trimmed = k.trim().to_string();
+            if !trimmed.is_empty() {
+                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
+                return Ok(trimmed);
+            }
+        }
+
+        // 2. 檢查 ~/.local/share/cyber-note/key_id
+        let share_key = Self::get_app_config_dir().join("key_id");
+        if let Ok(content) = fs::read_to_string(&share_key) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
+                return Ok(trimmed);
+            }
+        }
+
+        // 3. 檢查 note_dir/key_id
         let note_dir = Self::get_note_dir();
         let key_file = note_dir.join("key_id");
         if let Ok(content) = fs::read_to_string(&key_file) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
+                return Ok(trimmed);
+            }
+        }
+
+        // 4. 檢查舊版 ~/.config/cyber-note/key_id
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let legacy_key = PathBuf::from(&home).join(".config").join("cyber-note").join("key_id");
+        if let Ok(content) = fs::read_to_string(&legacy_key) {
             let trimmed = content.trim().to_string();
             if !trimmed.is_empty() {
                 crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
@@ -152,9 +308,38 @@ impl GameConfig {
             }
         }
 
+        // 1. 優先從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
+        let unified = Self::read_unified_config();
+        if let Some(ref g) = unified.gist_id {
+            let trimmed = g.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(Self::extract_clean_id(&trimmed));
+            }
+        }
+
+        // 2. 檢查 ~/.local/share/cyber-note/gist_id
+        let share_id = Self::get_app_config_dir().join("gist_id");
+        if let Ok(content) = fs::read_to_string(&share_id) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(Self::extract_clean_id(&trimmed));
+            }
+        }
+
+        // 3. 檢查 note_dir/gist_id
         let note_dir = Self::get_note_dir();
         let id_file = note_dir.join("gist_id");
         if let Ok(content) = fs::read_to_string(&id_file) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(Self::extract_clean_id(&trimmed));
+            }
+        }
+
+        // 4. 檢查舊版 ~/.config/cyber-note/gist_id
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let legacy_gist = PathBuf::from(&home).join(".config").join("cyber-note").join("gist_id");
+        if let Ok(content) = fs::read_to_string(&legacy_gist) {
             let trimmed = content.trim().to_string();
             if !trimmed.is_empty() {
                 return Ok(Self::extract_clean_id(&trimmed));
@@ -187,9 +372,16 @@ impl GameConfig {
     // 🛡️ 檢查是否已完成基礎配置
     pub fn is_configured() -> bool {
         let note_dir = Self::get_note_dir();
-        let has_key = note_dir.join("key_id").exists() || env::var("A_GPG_KEY").is_ok();
-        let has_gist = note_dir.join("gist_id").exists() || env::var("A_GIST_ID").is_ok();
-        let has_token = note_dir.join("token.gpg").exists();
+        let has_key = note_dir.join("key_id").exists()
+            || Self::get_app_config_dir().join("key_id").exists()
+            || Self::get_gpg_user_id().is_ok()
+            || env::var("A_GPG_KEY").is_ok();
+        let has_gist = note_dir.join("gist_id").exists()
+            || Self::get_app_config_dir().join("gist_id").exists()
+            || Self::get_gist_id().is_ok()
+            || env::var("A_GIST_ID").is_ok();
+        let has_token = note_dir.join("token.gpg").exists()
+            || Self::get_secrets_dir().join("token.gpg").exists();
         has_key && has_gist && has_token
     }
 }

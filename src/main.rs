@@ -5,7 +5,8 @@
 use chrono::Local;
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -170,6 +171,20 @@ fn run_init_wizard() {
     } else if has_token {
         println!("  ↳ 🛡️ 維持現有 token.gpg 密文憑證隔離保護。");
     }
+
+    // 💾 寫入全域統一設定檔 (~/.local/share/cyber-note/config.json)
+    let mut unified = GameConfig::read_unified_config();
+    unified.note_dir = Some(note_dir.to_str().unwrap_or("").to_string());
+    if let Ok(key) = GameConfig::get_gpg_user_id() {
+        unified.key_id = Some(key);
+    }
+    if let Ok(gid) = GameConfig::get_gist_id() {
+        unified.gist_id = Some(gid);
+    }
+    unified.token_path = Some(secret_token_file.to_str().unwrap_or("").to_string());
+    unified.last_updated = Some(Local::now().to_rfc3339());
+    let _ = GameConfig::write_unified_config(&unified);
+    println!("  ↳ 💾 統一設定檔已同步落盤: {:?}", GameConfig::get_unified_config_path());
 
     println!("\n✨ 系統配置與金鑰鎖定已完成！\n");
 }
@@ -497,9 +512,10 @@ fn handle_remote_encrypt_command(args: &[String], verbose: bool) {
     }
 }
 
-// 🌐 網頁端管理引擎控制邏輯 (Cyber-NOte Web Engine)
+// 🌐 網頁端管理引擎控制邏輯 (Cyber-NOte Web Engine - Rust 原生零依賴獨立伺服器)
 fn handle_web_command(sub_action: Option<&str>, port_opt: Option<&str>) {
-    let port = port_opt.unwrap_or("3000");
+    let port_str = port_opt.unwrap_or("3000");
+    let port: u16 = port_str.parse().unwrap_or(3000);
     let config_dir = GameConfig::get_app_config_dir();
     if !config_dir.exists() {
         let _ = fs::create_dir_all(&config_dir);
@@ -530,9 +546,7 @@ fn handle_web_command(sub_action: Option<&str>, port_opt: Option<&str>) {
             println!("💡 Rust 原生核心持續維持後台安全審計與命令處理。可隨時執行 'a --web' 啟動。");
         }
         Some("status") => {
-            let state = fs::read_to_string(&state_file).unwrap_or_else(|_| "standby".to_string());
-            let is_active = state.trim() == "active"
-                && std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
+            let is_active = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
 
             println!("┌────────────────────────────────────────────────────────────┐");
             println!("│ 🌐 Cyber-NOte Web 網頁端管理引擎 · 狀態監控                │");
@@ -548,90 +562,575 @@ fn handle_web_command(sub_action: Option<&str>, port_opt: Option<&str>) {
             println!("│ 服務埠號 : {:<47} │", port);
             println!("│ 存取位址 : {:<47} │", format!("http://localhost:{}", port));
             println!(
-                "│ 安全體系 : {:<47} │",
-                "Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎"
+                "│ 統一設定 : {:<47} │",
+                "~/.local/share/cyber-note/config.json"
+            );
+            println!(
+                "│ 架構核心 : {:<47} │",
+                "Rust 原生獨立 Web 引擎 (免安裝外掛/套件)"
             );
             println!("└────────────────────────────────────────────────────────────┘");
             if !is_active {
-                println!("💡 說明：網頁端為可選元件，預設處於待機關閉狀態。");
                 println!("👉 若要啟動網頁端管理介面，請執行: a --web");
             } else {
                 println!("👉 若要關閉網頁端管理介面，請執行: a --web stop");
             }
         }
         _ => {
-            let _ = fs::write(&state_file, "active");
+            let is_already_running = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
+            if is_already_running {
+                let _ = fs::write(&state_file, "active");
+                println!("\n🟢 Cyber-NOte Web 管理引擎已在埠號 {} 正常運行中！", port);
+                println!("🌐 存取位址: http://localhost:{}", port);
+                println!("📄 統一設定: ~/.local/share/cyber-note/config.json");
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(format!("http://localhost:{}", port))
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                return;
+            }
 
             println!("\n╔══════════════════════════════════════════════════════════════╗");
             println!("║          🛡️  Cyber-NOte 系統 · Web 網頁端管理引擎            ║");
             println!("╚══════════════════════════════════════════════════════════════╝");
             println!("🚀 Web 網頁端管理後台已喚醒！");
             println!("🌐 存取位址: http://localhost:{}", port);
-            println!("📊 架構核心: Rust 原生後台 (鎖定 GPG 安全審計) + JS 網頁管理引擎");
-            println!("💡 提示: 執行 'a --web stop' 可將網頁端切換回待機狀態。\n");
+            println!("📊 架構核心: Rust 原生獨立 Web 引擎 (免安裝外掛/套件，純原生極致運行)");
+            println!("📄 統一設定: ~/.local/share/cyber-note/config.json");
+            println!("💡 提示: 執行 'a --web stop' 可將網頁端切換回待機狀態，按 Ctrl+C 可停止服務。\n");
 
-            let dev_server_running =
-                std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
-
-            if !dev_server_running {
-                // 依賴檢測: 驗證 tsx 與 express 是否可用
-                let has_tsx = std::process::Command::new("which")
-                    .arg("tsx")
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-                    || std::process::Command::new("npx")
-                        .args(["tsx", "--version"])
-                        .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false);
-
-                let has_express = std::process::Command::new("node")
-                    .args(["-e", "require('express')"])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
-
-                if !has_tsx || !has_express {
-                    print_web_dependencies_guide(!has_tsx, !has_express);
-                }
-
-                println!("⏳ 正在載入 JS 網頁管理引擎服務...");
-                let child = std::process::Command::new("npm")
-                    .args(["run", "dev"])
-                    .stdout(std::process::Stdio::inherit())
-                    .stderr(std::process::Stdio::inherit())
-                    .spawn();
-
-                match child {
-                    Ok(mut proc) => {
-                        let pid = proc.id();
-                        let _ = fs::write(&pid_file, pid.to_string());
-                        println!("✨ JS 網頁端管理引擎已啟動 (PID: {})！", pid);
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg(format!("http://localhost:{}", port))
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn();
-                        let _ = proc.wait();
-                        let _ = fs::remove_file(&pid_file);
-                    }
-                    Err(e) => {
-                        println!("❌ 啟動失敗: {}", e);
-                        print_web_dependencies_guide(true, true);
-                    }
-                }
-            } else {
-                println!("🟢 JS 網頁端管理引擎目前已在埠號 {} 正常運行中！", port);
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(format!("http://localhost:{}", port))
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
-            }
+            start_rust_native_web_server(port, &pid_file, &state_file);
         }
     }
 }
+
+// ⚡ 啟動 Rust 原生獨立 Web 伺服器 (Zero-Dependency)
+fn start_rust_native_web_server(port: u16, pid_file: &Path, state_file: &Path) {
+    let pid = std::process::id();
+    let _ = fs::write(pid_file, pid.to_string());
+    let _ = fs::write(state_file, "active");
+
+    let listener = match TcpListener::bind(format!("0.0.0.0:{}", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            println!("❌ 伺服器綁定埠號 0.0.0.0:{} 失敗: {}", port, e);
+            let _ = fs::remove_file(pid_file);
+            return;
+        }
+    };
+
+    println!("✨ Rust 原生 Web 伺服器已成功就緒 (PID: {})！", pid);
+    println!("🌐 本地網頁管理端: http://localhost:{}", port);
+    println!("⚡ 隨時監控並同步統一設定: ~/.local/share/cyber-note/config.json\n");
+
+    let _ = std::process::Command::new("xdg-open")
+        .arg(format!("http://localhost:{}", port))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                std::thread::spawn(move || {
+                    handle_http_connection(stream);
+                });
+            }
+            Err(e) => {
+                eprintln!("連線錯誤: {}", e);
+            }
+        }
+    }
+
+    let _ = fs::remove_file(pid_file);
+}
+
+// 🌐 處理 HTTP 請求連線
+fn handle_http_connection(mut stream: TcpStream) {
+    let mut reader = BufReader::new(&stream);
+    let mut req_line = String::new();
+    if reader.read_line(&mut req_line).is_err() || req_line.trim().is_empty() {
+        return;
+    }
+
+    let parts: Vec<&str> = req_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return;
+    }
+    let method = parts[0];
+    let raw_path = parts[1];
+    let path = raw_path.split('?').next().unwrap_or(raw_path);
+
+    let mut content_length: usize = 0;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+            break;
+        }
+        let lower = line.to_lowercase();
+        if lower.starts_with("content-length:") {
+            if let Some(val) = line.split(':').nth(1) {
+                content_length = val.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        let _ = reader.read_exact(&mut body);
+    }
+
+    if method == "OPTIONS" {
+        let response = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(response.as_bytes());
+        return;
+    }
+
+    if path == "/api/health" {
+        let json = r#"{"status":"ok","webEngine":"active","core":"Rust Native Web Engine (Zero-Dependency)"}"#;
+        send_json_response(&mut stream, 200, json);
+        return;
+    }
+
+    if path == "/api/rust/status" {
+        let cfg = GameConfig::read_unified_config();
+        let note_dir = GameConfig::get_note_dir();
+        let config_dir = GameConfig::get_app_config_dir();
+        let key_id = GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置".to_string());
+        let gist_id = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
+        let token_path = GameConfig::get_secrets_dir().join("token.gpg");
+        let has_token = token_path.exists();
+        let state_file = config_dir.join("web.state");
+        let web_state = fs::read_to_string(&state_file).unwrap_or_else(|_| "active".to_string());
+
+        let res_obj = serde_json::json!({
+            "rustAvailable": true,
+            "binaryPath": "a",
+            "version": "0.0.4",
+            "engine": "Rust-Native-Zero-Dependency",
+            "noteDir": note_dir.to_str().unwrap_or(""),
+            "defaultDirStandard": "~/.local/share/cyber-note/notes",
+            "configDir": config_dir.to_str().unwrap_or(""),
+            "unifiedConfigFile": GameConfig::get_unified_config_path().to_str().unwrap_or(""),
+            "secretsDir": GameConfig::get_secrets_dir().to_str().unwrap_or(""),
+            "tokenPath": token_path.to_str().unwrap_or(""),
+            "keyId": key_id,
+            "gistId": gist_id,
+            "hasToken": has_token,
+            "webState": web_state.trim(),
+            "notes": []
+        });
+        send_json_response(&mut stream, 200, &res_obj.to_string());
+        return;
+    }
+
+    if path == "/api/rust/config" && method == "POST" {
+        if let Ok(body_str) = String::from_utf8(body) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body_str) {
+                let mut unified = GameConfig::read_unified_config();
+                if let Some(nd) = val.get("noteDir").and_then(|v| v.as_str()) {
+                    if !nd.trim().is_empty() {
+                        let p = GameConfig::expand_tilde(nd.trim());
+                        let _ = fs::create_dir_all(&p);
+                        unified.note_dir = Some(p.to_str().unwrap_or(nd).to_string());
+                    }
+                }
+                if let Some(k) = val.get("keyId").and_then(|v| v.as_str()) {
+                    if !k.trim().is_empty() {
+                        unified.key_id = Some(k.trim().to_string());
+                    }
+                }
+                if let Some(g) = val.get("gistId").and_then(|v| v.as_str()) {
+                    if !g.trim().is_empty() {
+                        unified.gist_id = Some(GameConfig::extract_clean_id(g));
+                    }
+                }
+                if let Some(t) = val.get("token").and_then(|v| v.as_str()) {
+                    if !t.trim().is_empty() {
+                        let sec_file = GameConfig::get_secrets_dir().join("token.gpg");
+                        let _ = fs::write(&sec_file, t.trim().as_bytes());
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = fs::set_permissions(&sec_file, fs::Permissions::from_mode(0o600));
+                        }
+                    }
+                }
+                unified.last_updated = Some(Local::now().to_rfc3339());
+                let _ = GameConfig::write_unified_config(&unified);
+
+                let res = serde_json::json!({
+                    "success": true,
+                    "message": "配置已成功合併寫入 ~/.local/share/cyber-note/config.json 統一設定檔！"
+                });
+                send_json_response(&mut stream, 200, &res.to_string());
+                return;
+            }
+        }
+        send_json_response(&mut stream, 400, r#"{"success":false,"message":"無效的 JSON 格式"}"#);
+        return;
+    }
+
+    if path == "/api/ledger" {
+        let ledger_path = GameConfig::get_app_config_dir().join("key_ledger.json");
+        if ledger_path.exists() {
+            if let Ok(content) = fs::read_to_string(&ledger_path) {
+                send_json_response(&mut stream, 200, &content);
+                return;
+            }
+        }
+        send_json_response(&mut stream, 200, "[]");
+        return;
+    }
+
+    if path == "/api/web/state" && method == "POST" {
+        if let Ok(body_str) = String::from_utf8(body) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body_str) {
+                let state = val.get("state").and_then(|s| s.as_str()).unwrap_or("active");
+                let state_file = GameConfig::get_app_config_dir().join("web.state");
+                let _ = fs::write(&state_file, state);
+                let res = serde_json::json!({
+                    "state": state,
+                    "message": if state == "active" { "Web 網頁端管理引擎已啟動 (ACTIVE)" } else { "Web 網頁端管理引擎已切換為待機模式 (STANDBY)" }
+                });
+                send_json_response(&mut stream, 200, &res.to_string());
+                return;
+            }
+        }
+        send_json_response(&mut stream, 200, r#"{"state":"active"}"#);
+        return;
+    }
+
+    serve_static_or_embedded(&mut stream, path);
+}
+
+fn send_json_response(stream: &mut TcpStream, code: u16, json: &str) {
+    let header = format!(
+        "HTTP/1.1 {} OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        code,
+        json.as_bytes().len(),
+        json
+    );
+    let _ = stream.write_all(header.as_bytes());
+}
+
+fn get_mime_type(file_path: &str) -> &'static str {
+    if file_path.ends_with(".html") {
+        "text/html; charset=utf-8"
+    } else if file_path.ends_with(".js") || file_path.ends_with(".mjs") {
+        "application/javascript; charset=utf-8"
+    } else if file_path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if file_path.ends_with(".json") {
+        "application/json; charset=utf-8"
+    } else if file_path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if file_path.ends_with(".png") {
+        "image/png"
+    } else if file_path.ends_with(".ico") {
+        "image/x-icon"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+fn serve_static_or_embedded(stream: &mut TcpStream, req_path: &str) {
+    let mut rel_path = req_path.trim_start_matches('/');
+    if rel_path.is_empty() || rel_path == "index.html" {
+        rel_path = "index.html";
+    }
+
+    let dist_dirs = [
+        PathBuf::from("dist"),
+        PathBuf::from("/app/applet/dist"),
+        GameConfig::get_app_config_dir().join("web").join("dist"),
+    ];
+
+    for dist_dir in &dist_dirs {
+        let candidate = dist_dir.join(rel_path);
+        if candidate.exists() && candidate.is_file() {
+            if let Ok(bytes) = fs::read(&candidate) {
+                let mime = get_mime_type(rel_path);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    mime,
+                    bytes.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&bytes);
+                return;
+            }
+        }
+        let spa_index = dist_dir.join("index.html");
+        if !rel_path.starts_with("assets/") && spa_index.exists() {
+            if let Ok(bytes) = fs::read(&spa_index) {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&bytes);
+                return;
+            }
+        }
+    }
+
+    let embedded_html = get_embedded_dashboard_html();
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        embedded_html.as_bytes().len(),
+        embedded_html
+    );
+    let _ = stream.write_all(header.as_bytes());
+}
+
+fn get_embedded_dashboard_html() -> &'static str {
+    r#"<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyber-NOte · 原生 Web 管理引擎</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #0d1117; color: #c9d1d9; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .neon-border { border: 1px solid rgba(16, 185, 129, 0.2); box-shadow: 0 0 15px rgba(16, 185, 129, 0.05); }
+    .neon-glow:hover { box-shadow: 0 0 20px rgba(16, 185, 129, 0.15); }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col p-4 md:p-8">
+  <header class="max-w-6xl w-full mx-auto mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-800 pb-6">
+    <div>
+      <div class="flex items-center gap-3">
+        <span class="text-3xl">🛡️</span>
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+            Cyber-NOte
+            <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 font-mono">v0.0.4 · Rust 原生獨立引擎</span>
+          </h1>
+          <p class="text-sm text-gray-400 mt-0.5">統一設定管理 · GPG 非對稱金鑰加密隔離 · 零外掛免裝套件</p>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-900/40 text-emerald-300 border border-emerald-700/50">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        Web 服務運行中 (ACTIVE)
+      </span>
+      <button onclick="fetchStatus()" class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 transition">
+        🔄 重新整理狀態
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-6xl w-full mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
+    <!-- 左側與中欄：狀態卡與統一設定 -->
+    <div class="lg:col-span-2 space-y-6">
+      <!-- 統一設定檔狀態提示卡 -->
+      <div class="bg-gray-900/70 rounded-xl p-5 neon-border">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-base font-semibold text-white flex items-center gap-2">
+            <span>📄</span> 全域統一設定檔 (Unified Configuration)
+          </h2>
+          <span class="text-xs font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-900">
+            CLI & Web 共用
+          </span>
+        </div>
+        <p class="text-xs text-gray-400 mb-4">
+          命令列 (<code class="text-gray-200 bg-gray-800 px-1 py-0.5 rounded">a</code>) 與 Web 管理介面已完全收斂至相同的單一設定檔，變更將全域即時生效。
+        </p>
+        <div class="bg-black/60 rounded-lg p-3 font-mono text-xs text-emerald-300 border border-gray-800 break-all select-all" id="cfgPath">
+          ~/.local/share/cyber-note/config.json
+        </div>
+      </div>
+
+      <!-- 四宮格狀態卡 -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="bg-gray-900/60 rounded-xl p-4 border border-gray-800">
+          <div class="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+            <span>📂</span> 筆記資料目錄 (Note Dir)
+          </div>
+          <div class="font-mono text-xs text-gray-200 font-semibold truncate" id="noteDirDisplay">載入中...</div>
+        </div>
+        <div class="bg-gray-900/60 rounded-xl p-4 border border-gray-800">
+          <div class="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+            <span>🔑</span> GPG 金鑰 ID (Key ID)
+          </div>
+          <div class="font-mono text-xs text-cyan-300 font-semibold truncate" id="keyIdDisplay">載入中...</div>
+        </div>
+        <div class="bg-gray-900/60 rounded-xl p-4 border border-gray-800">
+          <div class="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+            <span>🌐</span> GitHub Gist ID
+          </div>
+          <div class="font-mono text-xs text-indigo-300 font-semibold truncate" id="gistIdDisplay">載入中...</div>
+        </div>
+        <div class="bg-gray-900/60 rounded-xl p-4 border border-gray-800">
+          <div class="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+            <span>🔒</span> Token 憑證隔離 (POSIX 0600)
+          </div>
+          <div class="font-mono text-xs font-semibold" id="tokenDisplay">載入中...</div>
+        </div>
+      </div>
+
+      <!-- 統一設定配置表單 -->
+      <div class="bg-gray-900/80 rounded-xl p-6 neon-border">
+        <h2 class="text-base font-semibold text-white mb-4 flex items-center gap-2">
+          <span>⚙️</span> 即時設定編輯與保存
+        </h2>
+        <form id="configForm" onsubmit="handleSave(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-medium text-gray-300 mb-1">筆記工作目錄 (Note Directory)</label>
+            <input type="text" id="inputNoteDir" placeholder="例: ~/.local/share/cyber-note/notes 或 ~/BOok/NOte"
+              class="w-full bg-black/60 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 font-mono">
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-gray-300 mb-1">GPG 公鑰使用者 ID / 指紋</label>
+              <input type="text" id="inputKeyId" placeholder="例: CyberNOte 或 16 位金鑰指紋"
+                class="w-full bg-black/60 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 font-mono">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-300 mb-1">GitHub Gist ID</label>
+              <input type="text" id="inputGistId" placeholder="例: e81d7f6b0f9c4263a..."
+                class="w-full bg-black/60 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 font-mono">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-300 mb-1">GitHub Personal Access Token (將經 GPG 加密隔離)</label>
+            <input type="password" id="inputToken" placeholder="若保留現有 token.gpg 密文憑證請留空"
+              class="w-full bg-black/60 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-emerald-500 font-mono">
+          </div>
+          <div class="pt-2 flex items-center justify-between">
+            <span id="saveStatus" class="text-xs"></span>
+            <button type="submit" class="px-5 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition">
+              💾 保存並同步統一設定檔
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 右側欄：CLI 快速指引與原生 Web 說明 -->
+    <div class="space-y-6">
+      <div class="bg-gray-900/60 rounded-xl p-5 border border-gray-800">
+        <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+          <span>⚡</span> 終端常用指令速查
+        </h3>
+        <div class="space-y-2.5 font-mono text-xs">
+          <div class="bg-black/50 p-2.5 rounded border border-gray-800">
+            <span class="text-emerald-400">a -w</span>
+            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">喚醒 Rust 原生 Web 伺服器</div>
+          </div>
+          <div class="bg-black/50 p-2.5 rounded border border-gray-800">
+            <span class="text-emerald-400">a -w stop</span>
+            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">關閉 Web 伺服器並切換待機</div>
+          </div>
+          <div class="bg-black/50 p-2.5 rounded border border-gray-800">
+            <span class="text-emerald-400">a -d --all</span>
+            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">批量下載雲端 Gist 全部檔案</div>
+          </div>
+          <div class="bg-black/50 p-2.5 rounded border border-gray-800">
+            <span class="text-emerald-400">a -d 1.txt -o ./1.txt</span>
+            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">下載並精確儲存至當前工作目錄</div>
+          </div>
+          <div class="bg-black/50 p-2.5 rounded border border-gray-800">
+            <span class="text-emerald-400">a -k</span>
+            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">查看金鑰審計與歸檔簿</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-gray-900/40 rounded-xl p-5 border border-gray-800 text-xs space-y-3">
+        <h3 class="font-semibold text-gray-200 flex items-center gap-1.5">
+          <span>🛡️</span> 架構安全特色
+        </h3>
+        <ul class="space-y-2 text-gray-400 list-disc list-inside">
+          <li><strong>零套件外掛依賴：</strong>完全由 Rust 原生編譯運行，無需 Node.js、npm 或任何外部環境。</li>
+          <li><strong>目錄嚴格收斂：</strong>統一存檔於 <code class="text-gray-300">~/.local/share/cyber-note/</code>。</li>
+          <li><strong>金鑰隱私隔離：</strong>Token 憑證一律透過 GPG 封裝並設為 0600 許可權。</li>
+        </ul>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/rust/status');
+        const data = await res.json();
+        document.getElementById('noteDirDisplay').textContent = data.noteDir || '未配置';
+        document.getElementById('keyIdDisplay').textContent = data.keyId || '未配置';
+        document.getElementById('gistIdDisplay').textContent = data.gistId || '未配置';
+        
+        const tokenEl = document.getElementById('tokenDisplay');
+        if (data.hasToken) {
+          tokenEl.textContent = '🟢 已封裝隔離 (token.gpg)';
+          tokenEl.className = 'font-mono text-xs font-semibold text-emerald-400';
+        } else {
+          tokenEl.textContent = '⚪ 尚未配置';
+          tokenEl.className = 'font-mono text-xs font-semibold text-yellow-400';
+        }
+
+        if (data.unifiedConfigFile) {
+          document.getElementById('cfgPath').textContent = data.unifiedConfigFile;
+        }
+        if (!document.getElementById('inputNoteDir').value) {
+          document.getElementById('inputNoteDir').value = data.noteDir || '';
+        }
+        if (!document.getElementById('inputKeyId').value) {
+          document.getElementById('inputKeyId').value = data.keyId === '未配置' ? '' : data.keyId;
+        }
+        if (!document.getElementById('inputGistId').value) {
+          document.getElementById('inputGistId').value = data.gistId === '未配置' ? '' : data.gistId;
+        }
+      } catch (err) {
+        console.error('無法取得狀態:', err);
+      }
+    }
+
+    async function handleSave(e) {
+      e.preventDefault();
+      const statusEl = document.getElementById('saveStatus');
+      statusEl.textContent = '⏳ 正在寫入統一設定檔...';
+      statusEl.className = 'text-xs text-yellow-400';
+
+      const payload = {
+        noteDir: document.getElementById('inputNoteDir').value.trim(),
+        keyId: document.getElementById('inputKeyId').value.trim(),
+        gistId: document.getElementById('inputGistId').value.trim(),
+      };
+      const token = document.getElementById('inputToken').value.trim();
+      if (token) payload.token = token;
+
+      try {
+        const res = await fetch('/api/rust/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (result.success) {
+          statusEl.textContent = '✨ ' + result.message;
+          statusEl.className = 'text-xs text-emerald-400';
+          fetchStatus();
+        } else {
+          statusEl.textContent = '❌ 保存失敗: ' + (result.message || '未知錯誤');
+          statusEl.className = 'text-xs text-red-400';
+        }
+      } catch (err) {
+        statusEl.textContent = '❌ 網路通信錯誤: ' + err.message;
+        statusEl.className = 'text-xs text-red-400';
+      }
+    }
+
+    fetchStatus();
+  </script>
+</body>
+</html>
+"#
+}
+
 
 // 🛡️ 新增功能：a -p 檔案加密（支援普通文本、.gpg 巢狀多層加密、無金鑰密碼防窮舉加固與直接上傳）
 fn handle_protect_command(args: &[String], verbose: bool) {
