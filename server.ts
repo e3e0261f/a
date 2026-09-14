@@ -23,15 +23,39 @@ function expandTilde(p: string): string {
   return p;
 }
 
+// Get application config directory (strictly ~/.local/share/cyber-note)
+function getAppConfigDir(): string {
+  const home = process.env.HOME || "/root";
+  const configDir = path.join(home, ".local", "share", "cyber-note");
+  if (!fs.existsSync(configDir)) {
+    try {
+      fs.mkdirSync(configDir, { recursive: true });
+    } catch {
+      // ignore
+    }
+  }
+  return configDir;
+}
+
 // Locate the note directory matching Rust's GameConfig::get_note_dir
-// Standard Linux XDG path: ~/.local/share/cyber-note/notes (present/valid on every Linux distro)
+// Standard Linux XDG path: ~/.local/share/cyber-note/notes
 function getNoteDir(): string {
   if (process.env.A_NOTE_DIR) {
     return expandTilde(process.env.A_NOTE_DIR);
   }
-  const home = process.env.HOME || "/root";
-  const configDir = path.join(home, ".config", "cyber-note");
-  const persistentDirFile = path.join(configDir, "dir");
+  const appDir = getAppConfigDir();
+  const configJsonPath = path.join(appDir, "config.json");
+  if (fs.existsSync(configJsonPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configJsonPath, "utf-8"));
+      if (cfg.note_dir) {
+        return expandTilde(cfg.note_dir);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const persistentDirFile = path.join(appDir, "dir");
   if (fs.existsSync(persistentDirFile)) {
     try {
       const custom = fs.readFileSync(persistentDirFile, "utf-8").trim();
@@ -40,17 +64,7 @@ function getNoteDir(): string {
       // fallback
     }
   }
-  const legacyDirFile = path.join(home, ".config", "a", "dir");
-  if (fs.existsSync(legacyDirFile)) {
-    try {
-      const custom = fs.readFileSync(legacyDirFile, "utf-8").trim();
-      if (custom) return expandTilde(custom);
-    } catch {
-      // fallback
-    }
-  }
-  // Linux standard XDG directory: ~/.local/share/cyber-note/notes
-  const defaultDir = path.join(home, ".local", "share", "cyber-note", "notes");
+  const defaultDir = path.join(appDir, "notes");
   if (!fs.existsSync(defaultDir)) {
     try {
       fs.mkdirSync(defaultDir, { recursive: true });
@@ -61,11 +75,10 @@ function getNoteDir(): string {
   return defaultDir;
 }
 
-// 🛡️ Privacy Data Storage & Isolation Directory (~/.config/cyber-note/secrets)
+// 🛡️ Privacy Data Storage & Isolation Directory (~/.local/share/cyber-note/secrets)
 // Directory chmod 0700, token.gpg chmod 0600
 function getSecretsDir(): string {
-  const home = process.env.HOME || "/root";
-  const secretsDir = path.join(home, ".config", "cyber-note", "secrets");
+  const secretsDir = path.join(getAppConfigDir(), "secrets");
   if (!fs.existsSync(secretsDir)) {
     try {
       fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
