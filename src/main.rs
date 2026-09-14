@@ -287,17 +287,31 @@ fn print_web_dependencies_guide(missing_tsx: bool, missing_express: bool) {
     println!("   Rust 原生 CLI 模式 (a -p 加密, a -x 解密, a -u 同步, a -k 歸檔簿)！\n");
 }
 
-// 🚀 完全刪除/抹除倉庫修改歷史記錄：創建全新 Gist 倉庫並遷移
-fn handle_migrate_repo_command(args: &[String], verbose: bool) {
+// 🚀 創建新 Gist 倉庫：a --new -n 倉庫名 -i 倉庫信息
+fn handle_new_repo_command(args: &[String], verbose: bool) {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║       🚀 Cyber-NOte · 無痕抹除歷史與新倉庫無縫遷移           ║");
+    println!("║       🚀 Cyber-NOte · 創建全新 Gist 倉庫與無痕初始化         ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
-    println!("⚠️  【安全審查說明】");
-    println!("   GitHub Gist 會保留每一次編輯修訂的完整歷史紀錄。");
-    println!("   若要徹底銷毀、抹除以往所有版本的修訂歷史，必須建立全新 Gist，");
-    println!("   將本地所有機密文檔遷移後，重定向本地倉庫 ID 並銷毀舊倉庫！\n");
 
-    let delete_old = args.iter().any(|a| a == "--delete-old" || a == "-d");
+    let mut repo_name = "cyber_note_vault.manifest".to_string();
+    let mut repo_info = format!("Cyber-NOte Vault [Clean Slate @ {}]", Local::now().format("%Y-%m-%d %H:%M:%S"));
+
+    let mut skip_next = false;
+    for (i, arg) in args.iter().enumerate() {
+        if i < 2 { continue; }
+        if skip_next { skip_next = false; continue; }
+        if arg == "-n" || arg == "--name" || arg == "--repo" {
+            if i + 1 < args.len() {
+                repo_name = args[i + 1].clone();
+                skip_next = true;
+            }
+        } else if arg == "-i" || arg == "--info" || arg == "--desc" {
+            if i + 1 < args.len() {
+                repo_info = args[i + 1].clone();
+                skip_next = true;
+            }
+        }
+    }
 
     let token = match get_github_token(verbose) {
         Ok(t) => t,
@@ -309,11 +323,6 @@ fn handle_migrate_repo_command(args: &[String], verbose: bool) {
     };
 
     let note_dir = GameConfig::get_note_dir();
-    let old_gist_id = GameConfig::get_gist_url().ok().and_then(|url| {
-        url.split('/').last().map(|s| s.to_string())
-    }).unwrap_or_default();
-
-    println!("📂 正在掃描本地加密倉庫目錄: {:?}", note_dir);
     let mut files_to_migrate = std::collections::HashMap::new();
 
     if let Ok(entries) = fs::read_dir(&note_dir) {
@@ -321,15 +330,9 @@ fn handle_migrate_repo_command(args: &[String], verbose: bool) {
             let path = entry.path();
             if path.is_file() {
                 let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                // 排除本地設定與敏感憑證檔，只遷移加密筆記與文檔
-                if fname != "gist_id" && fname != "key_id" && fname != "token.gpg" && fname != "dir" {
+                if fname != "gist_id" && fname != "key_id" && fname != "token.gpg" && fname != "dir" && fname != "config.json" {
                     if let Ok(content) = fs::read_to_string(&path) {
                         files_to_migrate.insert(fname.to_string(), content);
-                        println!(
-                            "  📦 已裝箱待遷移檔案: {} ({:.2} KB)",
-                            fname,
-                            path.metadata().map(|m| m.len()).unwrap_or(0) as f64 / 1024.0
-                        );
                     }
                 }
             }
@@ -337,41 +340,65 @@ fn handle_migrate_repo_command(args: &[String], verbose: bool) {
     }
 
     if files_to_migrate.is_empty() {
-        println!("ℹ️  本地倉庫暫無額外文檔，將初始化乾淨保險庫基準檔。");
+        files_to_migrate.insert(repo_name, repo_info.clone());
     }
 
-    println!("\n🚀 正在向 GitHub 發起乾淨新倉庫建立請求 (歷史版本計數將徹底歸零)...");
-    let desc = format!("Cyber-NOte Vault [Clean Slate - Purged History @ {}]", Local::now().format("%Y-%m-%d %H:%M:%S"));
-    match create_clean_slate_gist(&files_to_migrate, &desc, &token, false, verbose) {
+    println!("\n🚀 正在向 GitHub 發起乾淨新倉庫建立請求...");
+    match create_clean_slate_gist(&files_to_migrate, &repo_info, &token, false, verbose) {
         Ok(new_gist_id) => {
             println!("✅ 全新 Gist 倉庫創建成功！");
             println!("  🆕 新倉庫 ID : {}", new_gist_id);
-            if !old_gist_id.is_empty() {
-                println!("  🏛️  舊倉庫 ID : {}", old_gist_id);
-            }
-
-            // 更新本地 gist_id
             let gist_file = note_dir.join("gist_id");
             let _ = fs::write(&gist_file, &new_gist_id);
-            let app_gist = GameConfig::get_app_config_dir().join("gist_id");
-            let _ = fs::write(&app_gist, &new_gist_id);
+            let mut unified = GameConfig::read_unified_config();
+            unified.gist_id = Some(new_gist_id.clone());
+            let _ = GameConfig::write_unified_config(&unified);
             println!("  🎯 本地同步管道已自動重新錨定至新倉庫！");
-
-            if delete_old && !old_gist_id.is_empty() && old_gist_id != new_gist_id {
-                println!("🗑️  正在銷毀帶有舊修改歷史記錄的舊倉庫: {}...", old_gist_id);
-                match delete_gist(&old_gist_id, &token, verbose) {
-                    Ok(_) => println!("  💥 舊倉庫已在 GitHub 上徹底銷毀，歷史編輯紀錄完全抹除！"),
-                    Err(e) => println!("  ⚠️  舊倉庫刪除失敗 (請確認 Token 具備 gist 刪除權限): {}", e),
-                }
-            } else if !old_gist_id.is_empty() {
-                println!("💡 提示：若需在 GitHub 上徹底刪除舊倉庫，可加上 --delete-old 參數。");
-            }
-
-            println!("\n✨ 遷移完成！歷史修訂痕跡已完全抹除切斷。");
         }
         Err(e) => {
             println!("❌ 創建新倉庫失敗: {}", e);
         }
+    }
+}
+
+// 🗑️ 刪除指定舊 Gist 倉庫：a --delete <gist_id>
+fn handle_delete_repo_command(args: &[String], verbose: bool) {
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║       🗑️  Cyber-NOte · 銷毀指定舊 Gist 倉庫                  ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+
+    let mut target_gist_id = String::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i < 2 { continue; }
+        if !arg.starts_with('-') {
+            target_gist_id = arg.clone();
+            break;
+        }
+    }
+
+    if target_gist_id.is_empty() {
+        if let Ok(g) = GameConfig::get_gist_id() {
+            target_gist_id = g;
+        }
+    }
+
+    if target_gist_id.is_empty() {
+        println!("❌ 錯誤：請指定欲刪除的 Gist ID。範例: a --delete <gist_id>");
+        return;
+    }
+
+    let token = match get_github_token(verbose) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("❌ 無法取得 GitHub Token: {}", e);
+            return;
+        }
+    };
+
+    println!("🗑️  正在向 GitHub 發送 DELETE 請求銷毀倉庫: {}...", target_gist_id);
+    match delete_gist(&target_gist_id, &token, verbose) {
+        Ok(_) => println!("  💥 倉庫 {} 已在 GitHub 上徹底銷毀！", target_gist_id),
+        Err(e) => println!("  ⚠️  刪除倉庫失敗: {}", e),
     }
 }
 
@@ -1463,13 +1490,15 @@ fn main() {
         return;
     }
 
-    // ✨ 2.5 倉庫修改歷史記錄抹除與全新遷移 (--migrate-repo / --clean-slate / --new-repo)
-    if args.len() > 1
-        && (args[1] == "--migrate-repo"
-            || args[1] == "--clean-slate"
-            || args[1] == "--new-repo")
-    {
-        handle_migrate_repo_command(&args, verbose);
+    // ✨ 2.5 創建新 Gist 倉庫：a --new -n 倉庫名 -i 倉庫信息
+    if args.len() > 1 && (args[1] == "--new" || args[1] == "--new-repo" || args[1] == "--clean-slate" || args[1] == "--migrate-repo") {
+        handle_new_repo_command(&args, verbose);
+        return;
+    }
+
+    // ✨ 2.52 刪除指定舊 Gist 倉庫：a --delete <gist_id>
+    if args.len() > 1 && (args[1] == "--delete" || args[1] == "--delete-repo") {
+        handle_delete_repo_command(&args, verbose);
         return;
     }
 

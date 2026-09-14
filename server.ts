@@ -617,28 +617,21 @@ app.post("/api/encrypt-file", async (req, res) => {
   }
 });
 
-// 4.6 🚀 抹除歷史與全新倉庫遷移接口 (Clean Slate Repository Migration)
-app.post("/api/gist/migrate-repo", async (req, res) => {
-  const { token, deleteOld = false } = req.body;
+// 4.6 🚀 創建新 Gist 倉庫接口 (a --new -n 倉庫名 -i 倉庫信息)
+app.post("/api/gist/new-repo", async (req, res) => {
+  const { token, repoName = "cyber_note_vault.manifest", repoInfo = "Cyber-NOte Vault" } = req.body;
 
   if (!token) {
-    return res.status(400).json({ error: "請提供 GitHub Token 憑證以進行倉庫遷移" });
+    return res.status(400).json({ error: "請提供 GitHub Token 憑證以創建新倉庫" });
   }
 
   const noteDir = getNoteDir();
-  const gistFile = path.join(noteDir, "gist_id");
-  let oldGistId = "";
-  if (fs.existsSync(gistFile)) {
-    try { oldGistId = fs.readFileSync(gistFile, "utf-8").trim(); } catch { /* ignore */ }
-  }
-
-  // 讀取本地所有需要遷移的加密檔案
   const filesPayload: Record<string, { content: string }> = {};
   if (fs.existsSync(noteDir)) {
     try {
       const allFiles = fs.readdirSync(noteDir);
       for (const f of allFiles) {
-        if (f !== "gist_id" && f !== "key_id" && f !== "token.gpg" && f !== "dir") {
+        if (f !== "gist_id" && f !== "key_id" && f !== "token.gpg" && f !== "dir" && f !== "config.json") {
           const fullPath = path.join(noteDir, f);
           const st = fs.statSync(fullPath);
           if (st.isFile()) {
@@ -653,14 +646,11 @@ app.post("/api/gist/migrate-repo", async (req, res) => {
   }
 
   if (Object.keys(filesPayload).length === 0) {
-    filesPayload["cyber_note_vault.manifest"] = {
-      content: `Cyber-NOte 乾淨無痕加密倉庫已就緒 (修訂歷史已徹底抹除 @ ${new Date().toISOString()})`,
-    };
+    filesPayload[repoName] = { content: repoInfo };
   }
 
   try {
-    // 1. 發送 POST 請求建立全新 Gist
-    const desc = `Cyber-NOte Vault [Clean Slate - Purged History @ ${new Date().toISOString()}]`;
+    const desc = repoInfo || `Cyber-NOte Vault [Clean Slate @ ${new Date().toISOString()}]`;
     const createRes = await fetch("https://api.github.com/gists", {
       method: "POST",
       headers: {
@@ -686,45 +676,181 @@ app.post("/api/gist/migrate-repo", async (req, res) => {
     const createdGist: any = await createRes.json();
     const newGistId = createdGist.id;
 
-    // 2. 更新本地 gist_id
-    const home = process.env.HOME || "/root";
+    // 更新本地 gist_id 與 config.json
+    const gistFile = path.join(noteDir, "gist_id");
     fs.writeFileSync(gistFile, newGistId);
-    fs.writeFileSync(path.join(home, ".config", "cyber-note", "gist_id"), newGistId);
-    try {
-      fs.writeFileSync(path.join(home, ".config", "a", "gist_id"), newGistId);
-    } catch { /* ignore */ }
+    const home = process.env.HOME || "/root";
+    const configDir = path.join(home, ".config", "cyber-note");
+    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, "gist_id"), newGistId);
 
-    // 3. 若指定刪除舊倉庫
-    let oldDeleted = false;
-    if (deleteOld && oldGistId && oldGistId !== newGistId) {
-      try {
-        const delRes = await fetch(`https://api.github.com/gists/${oldGistId}`, {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          },
-        });
-        if (delRes.status === 204 || delRes.ok) {
-          oldDeleted = true;
-        }
-      } catch {
-        // delete failed
-      }
+    const configJsonPath = path.join(configDir, "config.json");
+    let cfg: any = {};
+    if (fs.existsSync(configJsonPath)) {
+      try { cfg = JSON.parse(fs.readFileSync(configJsonPath, "utf-8")); } catch { /* ignore */ }
     }
+    cfg.gist_id = newGistId;
+    cfg.last_updated = new Date().toISOString();
+    fs.writeFileSync(configJsonPath, JSON.stringify(cfg, null, 2), "utf-8");
 
     res.json({
       success: true,
-      oldGistId,
       newGistId,
-      transferredFilesCount: Object.keys(filesPayload).length,
-      oldDeleted,
-      message: "全新倉庫建立成功！所有歷史修訂與 Git 提交記錄已徹底切斷抹除。",
+      message: "全新 Gist 倉庫創建成功，並已無縫錨定！",
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// 4.6.2 🗑️ 刪除指定舊 Gist 倉庫接口 (a --delete <gist_id>)
+app.post("/api/gist/delete-repo", async (req, res) => {
+  const { token, gistId } = req.body;
+
+  if (!token || !gistId) {
+    return res.status(400).json({ error: "請提供 GitHub Token 與目標 Gist ID" });
+  }
+
+  try {
+    const delRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (delRes.status === 204 || delRes.ok) {
+      res.json({ success: true, message: `Gist 倉庫 ${gistId} 已在 GitHub 上徹底銷毀！` });
+    } else {
+      const errText = await delRes.text();
+      res.status(delRes.status).json({ error: `刪除倉庫失敗: ${errText}` });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4.6.3 📦 多檔案批量加密與上傳支持 (/api/encrypt-files)
+app.post("/api/encrypt-files", async (req, res) => {
+  const {
+    files, // Array<{ fileName: string, content: string }>
+    pass,
+    iterations = 65011712,
+    useSymmetric = false,
+    uploadToGist = false,
+    token = "",
+    gistId = "",
+  } = req.body;
+
+  if (!files || !Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: "請提供有效的 files 陣列" });
+  }
+
+  const noteDir = getNoteDir();
+  const results = [];
+  const gistFilesPayload: Record<string, { content: string }> = {};
+
+  // 讀取鎖定金鑰
+  let lockedKey = "";
+  const keyFile = path.join(noteDir, "key_id");
+  if (fs.existsSync(keyFile)) {
+    try { lockedKey = fs.readFileSync(keyFile, "utf-8").trim(); } catch { /* ignore */ }
+  }
+
+  for (const fileItem of files) {
+    const fileName = fileItem.fileName;
+    const rawData = fileItem.content;
+    if (!fileName || rawData === undefined) continue;
+
+    const outputFileName = `${fileName}.gpg`;
+    const outputFilePath = path.join(noteDir, outputFileName);
+
+    try {
+      let ciphertext = "";
+      let cipherMode = "GPG_PUBLIC_KEY";
+      let keyIdUsed = lockedKey || "DEFAULT_KEY";
+      let iters = 0;
+
+      if (useSymmetric || pass) {
+        iters = iterations || 65011712;
+        cipherMode = "GPG_SYMMETRIC_S2K";
+        keyIdUsed = `SYMMETRIC-S2K (${iters} 輪)`;
+
+        const gpgRes = await runGpg(
+          [
+            "--batch", "--yes", "--armor", "--symmetric",
+            "--s2k-mode", "3", "--s2k-count", iters.toString(),
+            "--cipher-algo", "AES256", "--passphrase", pass || "",
+          ],
+          rawData
+        );
+        if (gpgRes.code !== 0) continue;
+        ciphertext = gpgRes.stdout;
+      } else if (lockedKey) {
+        const gpgRes = await runGpg(
+          ["--batch", "--yes", "--armor", "--encrypt", "--recipient", lockedKey, "--trust-model", "always"],
+          rawData
+        );
+        if (gpgRes.code !== 0) continue;
+        ciphertext = gpgRes.stdout;
+      } else {
+        return res.status(400).json({ error: "未配置 GPG 公鑰且未提供對稱密碼" });
+      }
+
+      fs.writeFileSync(outputFilePath, ciphertext, "utf-8");
+      const sha256 = crypto.createHash("sha256").update(ciphertext).digest("hex");
+
+      appendKeyLedger({
+        file_name: outputFileName,
+        file_path: outputFilePath,
+        key_id: keyIdUsed,
+        cipher_mode: cipherMode,
+        iterations: iters,
+        layer: 1,
+        sha256,
+        notes: "多檔案批量加密封裝",
+      });
+
+      gistFilesPayload[outputFileName] = { content: ciphertext };
+      results.push({ fileName, outputFileName, success: true });
+    } catch (e: any) {
+      results.push({ fileName, success: false, error: e.message });
+    }
+  }
+
+  let gistSynced = false;
+  let effectiveGistId = gistId;
+  if (!effectiveGistId) {
+    const gistFile = path.join(noteDir, "gist_id");
+    if (fs.existsSync(gistFile)) {
+      try { effectiveGistId = fs.readFileSync(gistFile, "utf-8").trim(); } catch { /* ignore */ }
+    }
+  }
+
+  if (uploadToGist && effectiveGistId && token && Object.keys(gistFilesPayload).length > 0) {
+    try {
+      const fetchRes = await fetch(`https://api.github.com/gists/${effectiveGistId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ files: gistFilesPayload }),
+      });
+      if (fetchRes.ok) gistSynced = true;
+    } catch { /* ignore */ }
+  }
+
+  res.json({
+    success: true,
+    processedCount: results.length,
+    results,
+    gistSynced,
+  });
 });
 
 // 4.7 🛡️ 遠端檔案在位加密套殼（Remote In-Place Encapsulate & Delete Original）
@@ -1103,12 +1229,12 @@ app.post("/api/gist/decapsulate-file", async (req, res) => {
   }
 });
 
-// 5. Update configuration (嚴格禁止 SSH 金鑰)
-app.post("/api/rust/config", (req, res) => {
+// 5. Update configuration (合併成單一設定檔 config.json，並將 Token 以 GPG armor 字符加密)
+app.post("/api/rust/config", async (req, res) => {
   const { noteDir, keyId, gistId, token } = req.body;
   const home = process.env.HOME || "/root";
   const configDir = path.join(home, ".config", "cyber-note");
-  const legacyConfigDir = path.join(home, ".config", "a");
+  const localShareDir = path.join(home, ".local", "share", "cyber-note");
 
   try {
     if (keyId !== undefined) {
@@ -1129,47 +1255,65 @@ app.post("/api/rust/config", (req, res) => {
       }
     }
 
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
-    if (!fs.existsSync(legacyConfigDir)) {
-      fs.mkdirSync(legacyConfigDir, { recursive: true });
+    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+    if (!fs.existsSync(localShareDir)) fs.mkdirSync(localShareDir, { recursive: true });
+
+    const configJsonPath = path.join(localShareDir, "config.json");
+    let cfg: any = {};
+    if (fs.existsSync(configJsonPath)) {
+      try { cfg = JSON.parse(fs.readFileSync(configJsonPath, "utf-8")); } catch { /* ignore */ }
     }
 
-    if (noteDir) {
+    if (noteDir !== undefined) {
+      cfg.note_dir = noteDir.trim();
       const exp = expandTilde(noteDir);
-      if (!fs.existsSync(exp)) {
-        fs.mkdirSync(exp, { recursive: true });
-      }
-      fs.writeFileSync(path.join(configDir, "dir"), noteDir.trim());
-      fs.writeFileSync(path.join(legacyConfigDir, "dir"), noteDir.trim());
+      if (!fs.existsSync(exp)) fs.mkdirSync(exp, { recursive: true });
     }
-
-    const currentNoteDir = getNoteDir();
     if (keyId !== undefined) {
-      fs.writeFileSync(path.join(currentNoteDir, "key_id"), keyId.trim());
-      fs.writeFileSync(path.join(configDir, "key_id"), keyId.trim());
-      fs.writeFileSync(path.join(legacyConfigDir, "key_id"), keyId.trim());
+      cfg.key_id = keyId.trim();
     }
-
     if (gistId !== undefined) {
       const cleanGist = gistId.replace(/https:\/\/gist\.github\.com\/[^\/]+\//, "").trim();
-      fs.writeFileSync(path.join(currentNoteDir, "gist_id"), cleanGist);
-      fs.writeFileSync(path.join(configDir, "gist_id"), cleanGist);
-      fs.writeFileSync(path.join(legacyConfigDir, "gist_id"), cleanGist);
+      cfg.gist_id = cleanGist;
     }
+    cfg.last_updated = new Date().toISOString();
 
-    // 🛡️ 隱私憑證隔離存儲
+    // 寫入單一統一設定檔 config.json
+    fs.writeFileSync(configJsonPath, JSON.stringify(cfg, null, 2), "utf-8");
+    // 同步備份至 ~/.config/cyber-note/config.json
+    fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify(cfg, null, 2), "utf-8");
+
+    // 🛡️ 隱私憑證隔離存儲 (以 GPG armor 字符加密 token.gpg)
     if (token) {
-      const secretsDir = getSecretsDir();
+      const secretsDir = path.join(localShareDir, "secrets");
+      if (!fs.existsSync(secretsDir)) fs.mkdirSync(secretsDir, { recursive: true });
+      try { fs.chmodSync(secretsDir, 0o700); } catch { /* ignore */ }
+
       const secretTokenPath = path.join(secretsDir, "token.gpg");
-      fs.writeFileSync(secretTokenPath, token.trim());
+      const activeKey = keyId !== undefined ? keyId.trim() : (cfg.key_id || "");
+
+      let armorEncryptedToken = token.trim();
+      if (activeKey) {
+        const encRes = await runGpg(
+          ["--batch", "--yes", "--armor", "--encrypt", "--recipient", activeKey, "--trust-model", "always"],
+          token.trim()
+        );
+        if (encRes.code === 0 && encRes.stdout) {
+          armorEncryptedToken = encRes.stdout;
+        }
+      }
+
+      fs.writeFileSync(secretTokenPath, armorEncryptedToken, "utf-8");
       try { fs.chmodSync(secretTokenPath, 0o600); } catch { /* ignore */ }
-      // 相容落盤
-      fs.writeFileSync(path.join(currentNoteDir, "token.gpg"), token.trim());
+      
+      const currentNoteDir = getNoteDir();
+      if (!fs.existsSync(currentNoteDir)) fs.mkdirSync(currentNoteDir, { recursive: true });
+      fs.writeFileSync(path.join(currentNoteDir, "token.gpg"), armorEncryptedToken, "utf-8");
+      cfg.token_path = secretTokenPath;
+      fs.writeFileSync(configJsonPath, JSON.stringify(cfg, null, 2), "utf-8");
     }
 
-    res.json({ success: true, message: "配置更新已落地至安全目錄！" });
+    res.json({ success: true, message: "配置已成功合併至單一設定檔 (config.json)，憑證已以 GPG armor 字符加密！" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
