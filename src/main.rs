@@ -1234,15 +1234,167 @@ fn main() {
         return;
     }
 
-    // ✨ 9. 雲端下載與自動解密還原 (-d / -x / --decrypt)
+    // ✨ 9. 雲端下載與自動解密還原 (-d / -x / --decrypt / --all / -o)
     if args.len() > 1 && (args[1] == "-d" || args[1] == "--download") {
         let should_decrypt = args.iter().any(|arg| arg == "-x" || arg == "--decrypt");
-        let raw_target_opt = args.iter().skip(2).find(|&a| {
-            a != "-x" && a != "--decrypt" && a != "-v" && a != "-vv" && a != "--verbose"
-        });
+        let is_all = args.iter().skip(2).any(|arg| arg == "--all" || arg == "-a");
+
+        // 解析 -o / --out / --output 參數
+        let mut out_path_opt: Option<String> = None;
+        let mut skip_next = false;
+        for (i, arg) in args.iter().enumerate() {
+            if i < 2 {
+                continue;
+            }
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if arg == "-o" || arg == "--out" || arg == "--output" {
+                if i + 1 < args.len() {
+                    out_path_opt = Some(args[i + 1].clone());
+                    skip_next = true;
+                }
+            }
+        }
+
+        let token = match get_github_token(verbose) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("❌ 錯誤：{}", e);
+                return;
+            }
+        };
+
+        // 🌟 支援 a -d --all (批量下載 Gist 倉庫全部檔案)
+        if is_all {
+            println!("📡 [雲端檢索] 正在掃描 GitHub Gist 倉庫檔案清單以進行批量下載...");
+            let files = match list_gist_files(&token, verbose) {
+                Ok(f) => f,
+                Err(e) => {
+                    println!("⚠️ 獲取清單失敗: {}", e);
+                    return;
+                }
+            };
+
+            if files.is_empty() {
+                println!("ℹ️ 雲端 Gist 倉庫目前無任何檔案。");
+                return;
+            }
+
+            let target_dir: PathBuf = if let Some(ref out_dir_str) = out_path_opt {
+                PathBuf::from(out_dir_str)
+            } else {
+                note_dir.clone()
+            };
+            let _ = fs::create_dir_all(&target_dir);
+
+            println!(
+                "☁️  [雲端同步] 開始批量下載 Gist 全部檔案 (共 {} 個) 至 {:?}...",
+                files.len(),
+                target_dir
+            );
+
+            let mut success_count = 0;
+            for (idx, file_name) in files.iter().enumerate() {
+                let local_file_name = if should_decrypt && file_name.ends_with(".gpg") {
+                    file_name.strip_suffix(".gpg").unwrap().to_string()
+                } else {
+                    file_name.clone()
+                };
+                let target_file_path = target_dir.join(&local_file_name);
+
+                match fetch_from_gist(file_name, &token, verbose) {
+                    Ok(encrypted_content) => {
+                        if should_decrypt {
+                            match decrypt_bytes_with_gpg(&encrypted_content, None) {
+                                Ok(decrypted_bytes) => {
+                                    if fs::write(&target_file_path, &decrypted_bytes).is_ok() {
+                                        println!(
+                                            "  [{}/{}] ✨ 已解密還原: {:?} ({:.2} KB)",
+                                            idx + 1,
+                                            files.len(),
+                                            target_file_path,
+                                            decrypted_bytes.len() as f64 / 1024.0
+                                        );
+                                        success_count += 1;
+                                    } else {
+                                        println!(
+                                            "  [{}/{}] ⚠️ 寫入磁碟失敗: {:?}",
+                                            idx + 1,
+                                            files.len(),
+                                            target_file_path
+                                        );
+                                    }
+                                }
+                                Err(e) => println!(
+                                    "  [{}/{}] ⚠️ 解密失敗 ({}): {}",
+                                    idx + 1,
+                                    files.len(),
+                                    file_name,
+                                    e
+                                ),
+                            }
+                        } else {
+                            if fs::write(&target_file_path, &encrypted_content).is_ok() {
+                                println!(
+                                    "  [{}/{}] ✨ 已下載: {:?} ({:.2} KB)",
+                                    idx + 1,
+                                    files.len(),
+                                    target_file_path,
+                                    encrypted_content.len() as f64 / 1024.0
+                                );
+                                success_count += 1;
+                            } else {
+                                println!(
+                                    "  [{}/{}] ⚠️ 寫入磁碟失敗: {:?}",
+                                    idx + 1,
+                                    files.len(),
+                                    target_file_path
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => println!(
+                        "  [{}/{}] ⚠️ 下載失敗 ({}): {}",
+                        idx + 1,
+                        files.len(),
+                        file_name,
+                        e
+                    ),
+                }
+            }
+
+            println!(
+                "\n✨ 全部下載完成！共成功下載 {}/{} 個檔案至: {:?}",
+                success_count,
+                files.len(),
+                target_dir
+            );
+            return;
+        }
+
+        // 🌟 單檔案下載（支援 -o 自訂檔名與 ./ 下載至本地工作目錄）
+        let mut raw_target_opt: Option<String> = None;
+        let mut i = 2;
+        while i < args.len() {
+            let a = &args[i];
+            if a == "-o" || a == "--out" || a == "--output" {
+                i += 2;
+                continue;
+            }
+            if a == "-x" || a == "--decrypt" || a == "-v" || a == "-vv" || a == "--verbose" {
+                i += 1;
+                continue;
+            }
+            if !a.starts_with('-') && raw_target_opt.is_none() {
+                raw_target_opt = Some(a.clone());
+            }
+            i += 1;
+        }
 
         let raw_target = match raw_target_opt {
-            Some(t) => t.clone(),
+            Some(t) => t,
             None => current_year.clone(),
         };
 
@@ -1259,42 +1411,63 @@ fn main() {
             remote_file_name.clone()
         };
 
-        let target_local_path = note_dir.join(&local_file_name);
-        let target_local_str = target_local_path.to_str().unwrap();
+        // 決定本地目標路徑：
+        // 若有 -o 參數，以 -o 為準（如 a -d 1.txt -o ./1.txt 或 -o ./ 存到當前目錄）
+        let target_local_path: PathBuf = if let Some(ref out_path_str) = out_path_opt {
+            let p = Path::new(out_path_str);
+            if out_path_str.ends_with('/') || p.is_dir() {
+                p.join(&local_file_name)
+            } else {
+                PathBuf::from(out_path_str)
+            }
+        } else if raw_target.starts_with("./")
+            || raw_target.starts_with("../")
+            || raw_target.starts_with('/')
+        {
+            PathBuf::from(&raw_target)
+        } else {
+            note_dir.join(&local_file_name)
+        };
 
-        match get_github_token(verbose) {
-            Ok(token) => {
-                println!("☁️  [雲端同步] 正在從 Gist 請求【{}】...", remote_file_name);
-                match fetch_from_gist(&remote_file_name, &token, verbose) {
-                    Ok(encrypted_content) => {
-                        if should_decrypt {
-                            println!("🔓 正在調用 GPG 進行解密還原...");
-                            match decrypt_bytes_with_gpg(&encrypted_content, None) {
-                                Ok(decrypted_bytes) => {
-                                    if fs::write(&target_local_path, &decrypted_bytes).is_ok() {
-                                        println!(
-                                            "✨ 檔案已成功解密還原至: {} (大小: {:.2} KB)",
-                                            target_local_str,
-                                            decrypted_bytes.len() as f64 / 1024.0
-                                        );
-                                    } else {
-                                        println!("⚠️ 寫入本地磁碟失敗");
-                                    }
-                                }
-                                Err(e) => println!("⚠️ 解密失敗: {}", e),
-                            }
-                        } else {
-                            if fs::write(&target_local_path, &encrypted_content).is_ok() {
-                                println!("✨ 密文包裹已成功下載至: {}", target_local_str);
+        if let Some(parent) = target_local_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = fs::create_dir_all(parent);
+            }
+        }
+        let target_local_str = target_local_path.to_str().unwrap_or(&local_file_name);
+
+        println!("☁️  [雲端同步] 正在從 Gist 請求【{}】...", remote_file_name);
+        match fetch_from_gist(&remote_file_name, &token, verbose) {
+            Ok(encrypted_content) => {
+                if should_decrypt {
+                    println!("🔓 正在調用 GPG 進行解密還原...");
+                    match decrypt_bytes_with_gpg(&encrypted_content, None) {
+                        Ok(decrypted_bytes) => {
+                            if fs::write(&target_local_path, &decrypted_bytes).is_ok() {
+                                println!(
+                                    "✨ 檔案已成功解密還原至: {} (大小: {:.2} KB)",
+                                    target_local_str,
+                                    decrypted_bytes.len() as f64 / 1024.0
+                                );
                             } else {
-                                println!("⚠️ 寫入本地磁碟失敗");
+                                println!("⚠️ 寫入本地磁碟失敗: {}", target_local_str);
                             }
                         }
+                        Err(e) => println!("⚠️ 解密失敗: {}", e),
                     }
-                    Err(e) => println!("⚠️ 下載失敗: {}", e),
+                } else {
+                    if fs::write(&target_local_path, &encrypted_content).is_ok() {
+                        println!(
+                            "✨ 密文包裹已成功下載至: {} (大小: {:.2} KB)",
+                            target_local_str,
+                            encrypted_content.len() as f64 / 1024.0
+                        );
+                    } else {
+                        println!("⚠️ 寫入本地磁碟失敗: {}", target_local_str);
+                    }
                 }
             }
-            Err(e) => println!("❌ 錯誤：{}", e),
+            Err(e) => println!("⚠️ 下載失敗: {}", e),
         }
         return;
     }
@@ -1514,6 +1687,9 @@ fn main() {
         println!("      a -s [檔案路徑]              #加密推送外部檔案至 Gist");
         println!("      a -s -u [檔案路徑]           #以明文模式推送純文字檔案至 Gist");
         println!("      a -l 或 a --list             #檢索雲端 Gist 倉庫全部檔案清單");
+        println!("      a -d --all                   #【批量下載】下載雲端 Gist 倉庫全部檔案至本地");
+        println!("      a -d [檔名] -o [目標路徑]     #【自訂下載】指定檔名/自訂路徑 (例: a -d 1.txt -o ./1.txt)");
+        println!("      a -d --all -o [目標目錄]      #下載全部檔案至自訂本地目錄 (例: a -d --all -o ./)");
         println!("      a -d [年份/檔名]             #下載雲端密文包裹至本地 (保留 .gpg)");
         println!("      a -d [檔名] -x               #下載並解密還原原始檔案 (去 .gpg)");
         println!("      a -r1 或 a -r 1              #刪除【倒數第 1 行】");

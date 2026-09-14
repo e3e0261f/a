@@ -51,6 +51,8 @@ export async function executeCommand(
     addLine('  a -s / a --sync           推送當前年度加密筆記至 GitHub Gist', 'green');
     addLine('  a -s [檔名] --raw         明文模式外傳檔案至 Gist (-u)', 'yellow');
     addLine('  a -l / a --list           掃描並列出 GitHub Gist 雲端倉庫檔案清單', 'cyan');
+    addLine('  a -d --all                批量下載 GitHub Gist 雲端倉庫全部檔案', 'green');
+    addLine('  a -d [檔名] -o [目標路徑]   自訂檔名或加 ./ 下載文件到本地工作目錄', 'green');
     addLine('  a -d [檔名] [-x]          下載雲端檔案 (-x 為自動破甲解密還原)', 'green');
     addLine('  a -r [關鍵字/倒數行/區間]   行級刪除：過濾指定內容重新加密存盤', 'yellow');
     addLine('  a -w / a --web [status/stop] 調度 JS 網頁管理引擎 (可開可關，預設關閉)', 'cyan');
@@ -126,6 +128,8 @@ export async function executeCommand(
     addLine("      a -a 或 a --all             #解密並列印今年本地筆記", 'gray');
     addLine("      a -s 或 a --sync            #推送今年加密筆記至雲端 Gist", 'gray');
     addLine("      a -l 或 a --list            #列出雲端 Gist 所有檔案清單", 'gray');
+    addLine("      a -d --all                  #批量下載雲端 Gist 全部檔案", 'gray');
+    addLine("      a -d [檔名] -o [目標路徑]    #指定檔名/路徑下載 (例: a -d 1.txt -o ./1.txt)", 'gray');
     addLine("      a -d [年份/檔名] [-x]        #下載雲端密文 (-x 自動解密)", 'gray');
     addLine("      a -r [關鍵字或行號]          #行級過濾剔除並重密存盤", 'gray');
     addLine("      a --init                    #配置引導精靈", 'gray');
@@ -302,33 +306,172 @@ export async function executeCommand(
     return lines;
   }
 
-  // 7. a -d / a --download
+  // 7. a -d / a --download (支援 --all 批量下載、-o 自訂輸出路徑，加 ./ 下載到本地)
   if (args[0] === '-d' || args[0] === '--download') {
     if (!config.gistId) {
       addLine('❌ 錯誤：未配置雲端 Gist ID。請先執行 a --init。', 'red');
       return lines;
     }
     const shouldDecrypt = args.includes('-x') || args.includes('--decrypt');
-    const rawTarget = args.slice(1).find((a) => a !== '-x' && a !== '--decrypt' && !a.startsWith('-')) || currentYear;
-    const remoteFileName = rawTarget.length === 4 && /^\d+$/.test(rawTarget)
-      ? `${rawTarget}.note.gpg`
-      : rawTarget;
+    const isAll = args.includes('--all') || args.includes('-a');
+
+    // 解析 -o / --out / --output 參數
+    let outPath: string | undefined = undefined;
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '-o' || args[i] === '--out' || args[i] === '--output') {
+        if (i + 1 < args.length) {
+          outPath = args[i + 1];
+        }
+        break;
+      }
+    }
+
+    // 🌟 支援 a -d --all 批量下載全部檔案
+    if (isAll) {
+      addLine('📡 [雲端檢索] 正在掃描 GitHub Gist 倉庫檔案清單以進行批量下載...', 'cyan');
+      try {
+        const fileItems = await listGistFiles(config.gistId, config.tokenDecrypted || '');
+        if (fileItems.length === 0) {
+          addLine('ℹ️ 雲端 Gist 倉庫目前無任何檔案。', 'yellow');
+          return lines;
+        }
+
+        const outDir = outPath || './';
+        addLine(`☁️ [雲端同步] 開始批量下載全部 ${fileItems.length} 個檔案至本地 ${outDir === './' ? '本地工作目錄' : outDir}...`, 'cyan', true);
+
+        let successCount = 0;
+        for (let idx = 0; idx < fileItems.length; idx++) {
+          const item = fileItems[idx];
+          const remoteFileName = item.filename;
+
+          try {
+            const remoteContent = await fetchFromGist(config.gistId, remoteFileName, config.tokenDecrypted || '');
+            let finalContent = remoteContent;
+            let localFileName = remoteFileName;
+
+            if (shouldDecrypt && remoteFileName.endsWith('.gpg')) {
+              try {
+                finalContent = await decryptWithGpg(remoteContent, config.gpgKeyId);
+                localFileName = remoteFileName.replace(/\.gpg$/, '');
+              } catch (e) {
+                // 如果解密失敗則保留原樣
+              }
+            }
+
+            // 本地存儲目的地
+            const targetFilePath = outDir.endsWith('/')
+              ? `${outDir}${localFileName}`
+              : `${outDir}/${localFileName}`;
+
+            // 寫入本地磁碟（伺服器工作目錄）
+            try {
+              await fetch('/api/notes/save-local', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  filePath: targetFilePath,
+                  content: finalContent,
+                }),
+              });
+            } catch {}
+
+            // 同步加入前端筆記庫
+            const noteFile: NoteFile = {
+              filename: localFileName,
+              year: /^\d{4}/.exec(localFileName)?.[0],
+              isEncrypted: !shouldDecrypt && finalContent.includes('-----BEGIN PGP MESSAGE-----'),
+              content: remoteContent,
+              decryptedContent: shouldDecrypt ? finalContent : undefined,
+              lastModified: Date.now(),
+            };
+            saveNote(noteFile);
+
+            addLine(
+              `  [${idx + 1}/${fileItems.length}] ✨ 已下載: ${targetFilePath} (${(finalContent.length / 1024).toFixed(2)} KB)${
+                shouldDecrypt && remoteFileName.endsWith('.gpg') ? ' [已解密還原]' : ''
+              }`,
+              'green'
+            );
+            successCount++;
+          } catch (err) {
+            addLine(`  [${idx + 1}/${fileItems.length}] ⚠️ 下載失敗 (${remoteFileName}): ${err instanceof Error ? err.message : String(err)}`, 'red');
+          }
+        }
+
+        onNotesChange(loadAllNotes());
+        addLine(`\n✨ 全部下載完成！共成功下載 ${successCount}/${fileItems.length} 個檔案至本地。`, 'green', true);
+      } catch (e) {
+        addLine(`⚠️ 批量獲取清單失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
+      }
+      return lines;
+    }
+
+    // 🌟 單檔案下載（支援 a -d 1.txt -o ./1.txt，-o 參數自訂檔名，加 ./ 下載文件到本地）
+    let rawTarget: string | undefined = undefined;
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '-o' || args[i] === '--out' || args[i] === '--output') {
+        i++; // 跳過 -o 後面的參數值
+        continue;
+      }
+      if (args[i] === '-x' || args[i] === '--decrypt' || args[i] === '-v' || args[i] === '--verbose') {
+        continue;
+      }
+      if (!args[i].startsWith('-') && !rawTarget) {
+        rawTarget = args[i];
+      }
+    }
+
+    const target = rawTarget || currentYear;
+    const remoteFileName = target.length === 4 && /^\d+$/.test(target)
+      ? `${target}.note.gpg`
+      : target;
 
     addLine(`☁️ [雲端雷達] 正在從 Gist 索取【${remoteFileName}】...`, 'cyan');
     try {
       const remoteContent = await fetchFromGist(config.gistId, remoteFileName, config.tokenDecrypted || '');
       let finalContent = remoteContent;
-      let finalFileName = remoteFileName;
+      let localFileName = remoteFileName;
 
-      if (shouldDecrypt) {
+      if (shouldDecrypt && remoteFileName.endsWith('.gpg')) {
         addLine('🔓 [保密局] 正在調用 GPG 私鑰進行破甲解密還原...', 'yellow');
         finalContent = await decryptWithGpg(remoteContent, config.gpgKeyId);
-        finalFileName = remoteFileName.replace(/\.gpg$/, '');
+        localFileName = remoteFileName.replace(/\.gpg$/, '');
+      }
+
+      // 決定目標路徑：
+      // 若有 -o 參數（如 -o ./1.txt），以 -o 為準；或原 target 含有 ./ / 等路徑
+      let targetLocalPath = outPath;
+      if (!targetLocalPath) {
+        if (target.startsWith('./') || target.startsWith('../') || target.startsWith('/')) {
+          targetLocalPath = target;
+        } else {
+          targetLocalPath = `./${localFileName}`;
+        }
+      } else if (targetLocalPath.endsWith('/') || targetLocalPath === '.') {
+        targetLocalPath = `${targetLocalPath.replace(/\/$/, '')}/${localFileName}`;
+      }
+
+      // 寫入本地磁碟 (伺服器本地工作目錄，加 ./ 下載文件到本地)
+      let savedToDisk = false;
+      try {
+        const saveRes = await fetch('/api/notes/save-local', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filePath: targetLocalPath,
+            content: finalContent,
+          }),
+        });
+        if (saveRes.ok) {
+          savedToDisk = true;
+        }
+      } catch (err) {
+        console.warn('寫入本地磁碟失敗:', err);
       }
 
       const noteFile: NoteFile = {
-        filename: finalFileName,
-        year: /^\d{4}/.exec(finalFileName)?.[0],
+        filename: localFileName,
+        year: /^\d{4}/.exec(localFileName)?.[0],
         isEncrypted: !shouldDecrypt && finalContent.includes('-----BEGIN PGP MESSAGE-----'),
         content: remoteContent,
         decryptedContent: shouldDecrypt ? finalContent : undefined,
@@ -338,7 +481,18 @@ export async function executeCommand(
       saveNote(noteFile);
       onNotesChange(loadAllNotes());
 
-      addLine(`✨ 檔案已成功下載至本地廠房：${finalFileName} (大小: ${(finalContent.length / 1024).toFixed(2)} KB)`, 'green', true);
+      if (savedToDisk || outPath) {
+        const isLocalCwd = (outPath && outPath.startsWith('./')) || target.startsWith('./');
+        addLine(
+          `✨ 檔案已成功下載並精確儲存至${isLocalCwd ? '當前終端機所在的本地工作目錄' : '本地路徑'}: ${targetLocalPath} (大小: ${(finalContent.length / 1024).toFixed(2)} KB)${
+            shouldDecrypt ? ' [已完成解密還原]' : ''
+          }`,
+          'green',
+          true
+        );
+      } else {
+        addLine(`✨ 檔案已成功下載至本地庫房：${localFileName} (大小: ${(finalContent.length / 1024).toFixed(2)} KB)${shouldDecrypt ? ' [已完成解密還原]' : ''}`, 'green', true);
+      }
     } catch (e) {
       addLine(`⚠️ 下載失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
     }

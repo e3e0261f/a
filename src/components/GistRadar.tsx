@@ -107,9 +107,17 @@ export const GistRadar: React.FC<GistRadarProps> = ({
     setTimeout(() => setActionNotice(''), 4000);
   };
 
-  // Download file from Gist
+  // Download file from Gist (支援 -o 自訂檔名與加 ./ 下載到本地)
   const handleDownload = async (filename: string, decrypt: boolean) => {
     if (!config.gistId) return;
+
+    const defaultOut = `./${decrypt && filename.endsWith('.gpg') ? filename.replace(/\.gpg$/, '') : filename}`;
+    const customOut = window.prompt(
+      `請輸入下載目標檔名或本地存放路徑 (-o 參數，加 ./ 下載至本地工作目錄):\n\n範例: ./1.txt 或 ${defaultOut}`,
+      defaultOut
+    );
+    if (customOut === null) return;
+
     setIsLoading(true);
     try {
       const remoteRaw = await fetchFromGist(
@@ -119,15 +127,32 @@ export const GistRadar: React.FC<GistRadarProps> = ({
       );
 
       let savedFilename = filename;
+      let finalContent = remoteRaw;
       let finalDecrypted: string | undefined = undefined;
 
       if (decrypt && filename.endsWith('.gpg')) {
         savedFilename = filename.replace(/\.gpg$/, '');
         finalDecrypted = await decryptWithGpg(remoteRaw, config.gpgKeyId);
+        finalContent = finalDecrypted;
+      }
+
+      const targetPath = customOut.trim() || defaultOut;
+
+      try {
+        await fetch('/api/notes/save-local', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filePath: targetPath,
+            content: finalContent,
+          }),
+        });
+      } catch (err) {
+        console.warn('寫入本地檔案失敗:', err);
       }
 
       const noteFile: NoteFile = {
-        filename: savedFilename,
+        filename: targetPath.replace(/^\.\//, ''),
         year: /^\d{4}/.exec(savedFilename)?.[0],
         isEncrypted: !decrypt && remoteRaw.includes('-----BEGIN PGP MESSAGE-----'),
         content: remoteRaw,
@@ -138,12 +163,87 @@ export const GistRadar: React.FC<GistRadarProps> = ({
       saveNote(noteFile);
       onNotesChange(loadAllNotes());
       flashNotice(
-        `✨ 檔案【${savedFilename}】已下載入庫本地！${
-          decrypt ? '（已完成私鑰破甲解密還原）' : '（保留密文）'
+        `✨ 檔案已成功下載至: ${targetPath} (大小: ${(finalContent.length / 1024).toFixed(2)} KB)${
+          decrypt ? ' [已完成私鑰解密還原]' : ''
         }`
       );
     } catch (e) {
       alert(`下載失敗: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Download ALL files from Gist (a -d --all)
+  const handleDownloadAll = async () => {
+    if (!config.gistId || files.length === 0) return;
+    const confirmDownload = window.confirm(
+      `確定要批量下載雲端 Gist 倉庫所有檔案（共 ${files.length} 個檔案）至本地嗎？(a -d --all)`
+    );
+    if (!confirmDownload) return;
+
+    setIsLoading(true);
+    let successCount = 0;
+    try {
+      const res = await fetch('/api/gist/download-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gistId: config.gistId,
+          token: config.tokenDecrypted || '',
+          outputDir: './',
+          decrypt: false,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        successCount = data.count || files.length;
+        if (data.files) {
+          for (const f of data.files) {
+            const noteFile: NoteFile = {
+              filename: f.filename,
+              year: /^\d{4}/.exec(f.filename)?.[0],
+              isEncrypted: !f.isDecrypted,
+              content: '',
+              lastModified: Date.now(),
+            };
+            saveNote(noteFile);
+          }
+        }
+      } else {
+        for (const file of files) {
+          try {
+            const remoteRaw = await fetchFromGist(
+              config.gistId,
+              file.filename,
+              config.tokenDecrypted || ''
+            );
+            await fetch('/api/notes/save-local', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filePath: `./${file.filename}`,
+                content: remoteRaw,
+              }),
+            });
+            const noteFile: NoteFile = {
+              filename: file.filename,
+              year: /^\d{4}/.exec(file.filename)?.[0],
+              isEncrypted: remoteRaw.includes('-----BEGIN PGP MESSAGE-----'),
+              content: remoteRaw,
+              lastModified: Date.now(),
+            };
+            saveNote(noteFile);
+            successCount++;
+          } catch {}
+        }
+      }
+
+      onNotesChange(loadAllNotes());
+      flashNotice(`✨ [a -d --all] 全部下載完成！共成功下載 ${successCount}/${files.length} 個檔案至本地工作目錄。`);
+    } catch (e) {
+      alert(`批量下載失敗: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setIsLoading(false);
     }
@@ -431,6 +531,18 @@ export const GistRadar: React.FC<GistRadarProps> = ({
           >
             <History className="w-3.5 h-3.5 text-rose-400" />
             <span>抹除歷史 / 新建倉庫</span>
+          </button>
+
+          {/* Button: 批量下載全部 (a -d --all) */}
+          <button
+            id="download-all-files-btn"
+            onClick={handleDownloadAll}
+            disabled={isLoading || !config.gistId || files.length === 0}
+            className="px-3 py-1.5 bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 text-xs font-mono rounded-lg border border-emerald-700/50 transition flex items-center gap-1.5 disabled:opacity-40 shadow-sm"
+            title="批量下載 Gist 倉庫所有檔案至本地 (a -d --all)"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-400" />
+            <span>下載全部 (a -d --all)</span>
           </button>
 
           <button

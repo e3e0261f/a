@@ -1202,6 +1202,173 @@ app.get("/api/ledger", (_req, res) => {
   res.json(ledgerData);
 });
 
+// 8. Save file locally (支援 -o 參數及 ./ 存放至本地目錄)
+app.post("/api/notes/save-local", (req, res) => {
+  const { filePath, content, isBase64 } = req.body;
+  if (!filePath) {
+    return res.status(400).json({ error: "Missing filePath parameter" });
+  }
+  if (content === undefined || content === null) {
+    return res.status(400).json({ error: "Missing content parameter" });
+  }
+
+  try {
+    const resolvedPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(process.cwd(), filePath);
+
+    const dir = path.dirname(resolvedPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    if (isBase64) {
+      fs.writeFileSync(resolvedPath, Buffer.from(content, "base64"));
+    } else {
+      fs.writeFileSync(resolvedPath, content, "utf-8");
+    }
+
+    const stat = fs.statSync(resolvedPath);
+    res.json({
+      success: true,
+      filePath,
+      resolvedPath,
+      size: stat.size,
+      message: `✨ 檔案已成功下載並寫入本地: ${filePath}`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `寫入本地檔案失敗: ${err.message}` });
+  }
+});
+
+// 9. Download all files from Gist (a -d --all)
+app.post("/api/gist/download-all", async (req, res) => {
+  const { outputDir = "./", decrypt = false, passphrase, token, gistId } = req.body;
+  const noteDir = getNoteDir();
+  const home = process.env.HOME || "/root";
+
+  let effectiveToken = token;
+  if (!effectiveToken) {
+    const tokenFile = path.join(home, ".config", "cyber-note", "secrets", "token.gpg");
+    if (fs.existsSync(tokenFile)) {
+      const dec = await runGpg(["--batch", "--yes", "--decrypt", tokenFile]);
+      if (dec.code === 0 && dec.stdout.trim()) {
+        effectiveToken = dec.stdout.trim();
+      }
+    }
+  }
+
+  let effectiveGistId = gistId;
+  if (!effectiveGistId) {
+    const gf = path.join(noteDir, "gist_id");
+    if (fs.existsSync(gf)) {
+      try { effectiveGistId = fs.readFileSync(gf, "utf-8").trim(); } catch {}
+    }
+  }
+  if (!effectiveGistId) {
+    const cfgGist = path.join(home, ".config", "cyber-note", "gist_id");
+    if (fs.existsSync(cfgGist)) {
+      try { effectiveGistId = fs.readFileSync(cfgGist, "utf-8").trim(); } catch {}
+    }
+  }
+
+  if (!effectiveGistId) {
+    return res.status(400).json({ error: "未配置 Gist ID，請先執行 a --init" });
+  }
+
+  try {
+    const gistUrl = `https://api.github.com/gists/${effectiveGistId}`;
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    };
+    if (effectiveToken) {
+      headers.Authorization = `Bearer ${effectiveToken}`;
+    }
+
+    const gistRes = await fetch(gistUrl, { headers });
+    if (!gistRes.ok) {
+      return res.status(gistRes.status).json({ error: `獲取 Gist 倉庫失敗 (HTTP ${gistRes.status})` });
+    }
+
+    const gistData: any = await gistRes.json();
+    const filesObj = gistData.files || {};
+    const fileKeys = Object.keys(filesObj);
+
+    if (fileKeys.length === 0) {
+      return res.json({ success: true, count: 0, files: [], message: "雲端 Gist 倉庫目前無任何檔案" });
+    }
+
+    const targetDir = path.isAbsolute(outputDir)
+      ? outputDir
+      : path.resolve(process.cwd(), outputDir);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    const downloadedFiles: Array<{ filename: string; localPath: string; size: number; isDecrypted: boolean }> = [];
+
+    // 讀取鎖定金鑰
+    let lockedKey = "";
+    const keyFile = path.join(noteDir, "key_id");
+    if (fs.existsSync(keyFile)) {
+      try { lockedKey = fs.readFileSync(keyFile, "utf-8").trim(); } catch {}
+    }
+    if (!lockedKey) {
+      const cfgKey = path.join(home, ".config", "cyber-note", "key_id");
+      if (fs.existsSync(cfgKey)) {
+        try { lockedKey = fs.readFileSync(cfgKey, "utf-8").trim(); } catch {}
+      }
+    }
+
+    for (const filename of fileKeys) {
+      const fileInfo = filesObj[filename];
+      let content = fileInfo.content || "";
+      if (fileInfo.truncated && fileInfo.raw_url) {
+        const rawRes = await fetch(fileInfo.raw_url);
+        if (rawRes.ok) content = await rawRes.text();
+      }
+
+      let shouldDec = decrypt && filename.endsWith(".gpg");
+      let outName = filename;
+      let finalContent = content;
+
+      if (shouldDec) {
+        const decArgs = ["--batch", "--yes", "--decrypt"];
+        if (passphrase) {
+          decArgs.push("--passphrase", passphrase);
+        }
+        const decRes = await runGpg(decArgs, content);
+        if (decRes.code === 0) {
+          finalContent = decRes.stdout;
+          outName = filename.slice(0, -4);
+        } else {
+          shouldDec = false;
+        }
+      }
+
+      const destPath = path.join(targetDir, outName);
+      fs.writeFileSync(destPath, finalContent, "utf-8");
+      downloadedFiles.push({
+        filename: outName,
+        localPath: destPath,
+        size: Buffer.byteLength(finalContent),
+        isDecrypted: shouldDec,
+      });
+    }
+
+    res.json({
+      success: true,
+      count: downloadedFiles.length,
+      targetDir,
+      files: downloadedFiles,
+      message: `✨ 全部下載完成！共成功下載 ${downloadedFiles.length} 個檔案至: ${targetDir}`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `批量下載失敗: ${err.message}` });
+  }
+});
+
 // 7. Toggle Web Engine State (Active / Standby)
 app.post("/api/web/state", (req, res) => {
   const { state } = req.body;
