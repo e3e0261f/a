@@ -248,17 +248,7 @@ impl GameConfig {
             }
         }
 
-        // 1. 優先從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
-        let unified = Self::read_unified_config();
-        if let Some(ref k) = unified.key_id {
-            let trimmed = k.trim().to_string();
-            if !trimmed.is_empty() {
-                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
-                return Ok(trimmed);
-            }
-        }
-
-        // 2. 檢查 ~/.local/share/cyber-note/key_id
+        // 1. 檢查 ~/.local/share/cyber-note/key_id
         let share_key = Self::get_app_config_dir().join("key_id");
         if let Ok(content) = fs::read_to_string(&share_key) {
             let trimmed = content.trim().to_string();
@@ -268,11 +258,21 @@ impl GameConfig {
             }
         }
 
-        // 3. 檢查 note_dir/key_id
+        // 2. 檢查 note_dir/key_id
         let note_dir = Self::get_note_dir();
         let key_file = note_dir.join("key_id");
         if let Ok(content) = fs::read_to_string(&key_file) {
             let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
+                return Ok(trimmed);
+            }
+        }
+
+        // 3. 從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
+        let unified = Self::read_unified_config();
+        if let Some(ref k) = unified.key_id {
+            let trimmed = k.trim().to_string();
             if !trimmed.is_empty() {
                 crate::encrypt::validate_gpg_key_not_ssh(&trimmed)?;
                 return Ok(trimmed);
@@ -308,16 +308,7 @@ impl GameConfig {
             }
         }
 
-        // 1. 優先從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
-        let unified = Self::read_unified_config();
-        if let Some(ref g) = unified.gist_id {
-            let trimmed = g.trim().to_string();
-            if !trimmed.is_empty() {
-                return Ok(Self::extract_clean_id(&trimmed));
-            }
-        }
-
-        // 2. 檢查 ~/.local/share/cyber-note/gist_id
+        // 1. 檢查 ~/.local/share/cyber-note/gist_id
         let share_id = Self::get_app_config_dir().join("gist_id");
         if let Ok(content) = fs::read_to_string(&share_id) {
             let trimmed = content.trim().to_string();
@@ -326,11 +317,20 @@ impl GameConfig {
             }
         }
 
-        // 3. 檢查 note_dir/gist_id
+        // 2. 檢查 note_dir/gist_id
         let note_dir = Self::get_note_dir();
         let id_file = note_dir.join("gist_id");
         if let Ok(content) = fs::read_to_string(&id_file) {
             let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(Self::extract_clean_id(&trimmed));
+            }
+        }
+
+        // 3. 從統一設定檔讀取 (~/.local/share/cyber-note/config.json)
+        let unified = Self::read_unified_config();
+        if let Some(ref g) = unified.gist_id {
+            let trimmed = g.trim().to_string();
             if !trimmed.is_empty() {
                 return Ok(Self::extract_clean_id(&trimmed));
             }

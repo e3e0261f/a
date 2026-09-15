@@ -103,11 +103,6 @@ pub fn record_ledger_entry(
     let json = serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?;
     fs::write(&path, &json).map_err(|e| format!("無法寫入金鑰歸檔簿: {}", e))?;
 
-    // 同步備份至筆記資料夾內
-    let note_dir = GameConfig::get_note_dir();
-    let note_ledger_path = note_dir.join("key_ledger.json");
-    let _ = fs::write(note_ledger_path, &json);
-
     Ok(())
 }
 

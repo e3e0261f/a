@@ -85,9 +85,12 @@ fn run_init_wizard() {
 
         match validate_gpg_key_not_ssh(&key_id) {
             Ok(_) => {
-                let key_file = note_dir.join("key_id");
-                let _ = fs::write(&key_file, &key_id);
-                println!("  ↳ 🔑 GPG 金鑰已鎖定並存檔: {:?}", key_file);
+                let share_key = GameConfig::get_app_config_dir().join("key_id");
+                let _ = fs::write(&share_key, &key_id);
+                let mut unified = GameConfig::read_unified_config();
+                unified.key_id = Some(key_id.clone());
+                let _ = GameConfig::write_unified_config(&unified);
+                println!("  ↳ 🔑 GPG 金鑰已鎖定並存檔: {:?}", share_key);
                 break;
             }
             Err(err_msg) => {
@@ -108,11 +111,14 @@ fn run_init_wizard() {
     let raw_gist = prompt_input("請輸入 Gist ID 或 URL", gist_prompt_default);
     let clean_gist_id = GameConfig::extract_clean_id(&raw_gist);
     if !clean_gist_id.is_empty() {
-        let gist_file = note_dir.join("gist_id");
-        let _ = fs::write(&gist_file, &clean_gist_id);
+        let share_gist = GameConfig::get_app_config_dir().join("gist_id");
+        let _ = fs::write(&share_gist, &clean_gist_id);
+        let mut unified = GameConfig::read_unified_config();
+        unified.gist_id = Some(clean_gist_id.clone());
+        let _ = GameConfig::write_unified_config(&unified);
         println!(
             "  ↳ 🌐 Gist ID [{}] 已存檔: {:?}",
-            clean_gist_id, gist_file
+            clean_gist_id, share_gist
         );
     }
 
@@ -120,8 +126,7 @@ fn run_init_wizard() {
     println!("\n--- [步驟 3/3: GitHub 存取憑證封裝與隱私隔離] ---");
     let secrets_dir = GameConfig::get_secrets_dir();
     let secret_token_file = secrets_dir.join("token.gpg");
-    let legacy_token_file = note_dir.join("token.gpg");
-    let has_token = secret_token_file.exists() || legacy_token_file.exists();
+    let has_token = secret_token_file.exists();
     let token_default = if has_token {
         Some("保留現有加密憑證")
     } else {
@@ -140,15 +145,13 @@ fn run_init_wizard() {
             io::stdout().flush().unwrap();
             match encrypt_with_gpg(token_input.as_bytes(), &active_key) {
                 Ok(encrypted_token) => {
-                    // 寫入隔離目錄 (~/.config/cyber-note/secrets/token.gpg)
+                    // 寫入隔離目錄 (~/.local/share/cyber-note/secrets/token.gpg)
                     if fs::write(&secret_token_file, encrypted_token.as_bytes()).is_ok() {
                         #[cfg(unix)]
                         {
                             use std::os::unix::fs::PermissionsExt;
                             let _ = fs::set_permissions(&secret_token_file, fs::Permissions::from_mode(0o600));
                         }
-                        // 亦備份一份至 note_dir 維持舊工具相容
-                        let _ = fs::write(&legacy_token_file, encrypted_token.as_bytes());
 
                         println!(" [成功]");
                         let _ = record_ledger_entry(
@@ -349,8 +352,8 @@ fn handle_new_repo_command(args: &[String], verbose: bool) {
         Ok(new_gist_id) => {
             println!("✅ 全新 Gist 倉庫創建成功！");
             println!("  🆕 新倉庫 ID : {}", new_gist_id);
-            let gist_file = note_dir.join("gist_id");
-            let _ = fs::write(&gist_file, &new_gist_id);
+            let share_gist = GameConfig::get_app_config_dir().join("gist_id");
+            let _ = fs::write(&share_gist, &new_gist_id);
             let mut unified = GameConfig::read_unified_config();
             unified.gist_id = Some(new_gist_id.clone());
             let _ = GameConfig::write_unified_config(&unified);
