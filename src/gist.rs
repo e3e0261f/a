@@ -17,15 +17,17 @@ pub fn sync_to_gist(content: &str, file_name: &str, token: &str, verbose: bool) 
     let client = build_client();
     let url = GameConfig::get_gist_url()?; 
 
+    let safe_content = if content.is_empty() { "\n" } else { content };
+
     if verbose {
-        println!("  📡 [網路] 正在向 {} 發送 PATCH 請求 (資料量: {} Bytes)...", url, content.len());
+        println!("  📡 [網路] 正在向 {} 發送 PATCH 請求 (資料量: {} Bytes)...", url, safe_content.len());
     }
 
     let body = json!({
         "description": "Cyber-Forge 赛博灵感管家 自动云端加密备份法典",
         "files": {
             file_name: {
-                "content": content
+                "content": safe_content
             }
         }
     });
