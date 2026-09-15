@@ -1654,9 +1654,10 @@ fn main() {
                 if let Ok(entry) = entry {
                     let path = entry.path();
                     if path.is_file() {
-                        if let Some(name_str) = path.file_name().and_then(|n| n.to_str()) {
+                        let name_opt = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
+                        if let Some(name_str) = name_opt {
                             if name_str != "config.dae" && name_str != "gist_id" && name_str != "key_id" {
-                                files_to_sync.push((path, name_str.to_string()));
+                                files_to_sync.push((path, name_str));
                             }
                         }
                     }
@@ -2284,7 +2285,8 @@ fn main() {
         println!("      a -p [檔案] --pass [密碼]    #【無密鑰防窮舉】S2K 65,011,712 輪密碼對稱加密");
         println!("      a -p [檔案] -u               #【加密直傳】加密後直接上傳至雲端 Gist");
         println!("      a -x [檔案路徑]              #【解密還原】還原一層加密封裝 (去 .gpg)");
-        println!("      a --migrate-repo [--delete-old] #【抹除歷史】建立全新 Gist 倉庫徹底銷毀舊歷史版本");
+        println!("      a --new [--clean-slate]        #【創建新倉庫】建立全新 Gist 倉庫徹底抹除歷史版本");
+        println!("      a --delete [gist_id]           #【刪除倉庫】指定刪除遠端 Gist 倉庫");
         println!("      a -k 或 a --ledger           #【金鑰歸檔簿】查看檔案與金鑰審計清單");
         println!("      a -a 或 a --all              #解密並列印今年度主機密文檔");
         println!("      a -a ./[檔案]                #解密並列印【本地密文檔案】");
