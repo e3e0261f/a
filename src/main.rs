@@ -291,31 +291,18 @@ fn print_web_dependencies_guide(missing_tsx: bool, missing_express: bool) {
     println!("   Rust 原生 CLI 模式 (a -p 加密, a -x 解密, a -u 同步, a -k 歸檔簿)！\n");
 }
 
-// 🚀 創建新 Gist 倉庫：a --new -n 倉庫名 -i 倉庫信息
+// 🚀 創建新檔案至 Gist：a --new [文件名] [文件內容]
 fn handle_new_repo_command(args: &[String], verbose: bool) {
-    println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║       🚀 Cyber-NOte · 創建全新 Gist 倉庫與無痕初始化         ║");
-    println!("╚══════════════════════════════════════════════════════════════╝");
-
-    let mut repo_name = "cyber_note_vault.manifest".to_string();
-    let mut repo_info = format!("Cyber-NOte Vault [Clean Slate @ {}]", Local::now().format("%Y-%m-%d %H:%M:%S"));
-
-    let mut skip_next = false;
-    for (i, arg) in args.iter().enumerate() {
-        if i < 2 { continue; }
-        if skip_next { skip_next = false; continue; }
-        if arg == "-n" || arg == "--name" || arg == "--repo" {
-            if i + 1 < args.len() {
-                repo_name = args[i + 1].clone();
-                skip_next = true;
-            }
-        } else if arg == "-i" || arg == "--info" || arg == "--desc" {
-            if i + 1 < args.len() {
-                repo_info = args[i + 1].clone();
-                skip_next = true;
-            }
-        }
+    if args.len() < 3 {
+        println!("❌ 錯誤：請指定檔案名稱與內容。範例: a --new hello.txt \"Hello world\"");
+        return;
     }
+    let filename = &args[2];
+    let content = if args.len() > 3 {
+        args[3..].join(" ")
+    } else {
+        "\n".to_string()
+    };
 
     let token = match get_github_token(verbose) {
         Ok(t) => t,
@@ -326,70 +313,20 @@ fn handle_new_repo_command(args: &[String], verbose: bool) {
         }
     };
 
-    let note_dir = GameConfig::get_note_dir();
-    let mut files_to_migrate = std::collections::HashMap::new();
-
-    if let Ok(entries) = fs::read_dir(&note_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                if fname != "gist_id" && fname != "key_id" && fname != "token.gpg" && fname != "dir" && fname != "config.json" {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        files_to_migrate.insert(fname.to_string(), content);
-                    }
-                }
-            }
-        }
-    }
-
-    if files_to_migrate.is_empty() {
-        files_to_migrate.insert(repo_name, repo_info.clone());
-    }
-
-    println!("\n🚀 正在向 GitHub 發起乾淨新倉庫建立請求...");
-    match create_clean_slate_gist(&files_to_migrate, &repo_info, &token, false, verbose) {
-        Ok(new_gist_id) => {
-            println!("✅ 全新 Gist 倉庫創建成功！");
-            println!("  🆕 新倉庫 ID : {}", new_gist_id);
-            let share_gist = GameConfig::get_app_config_dir().join("gist_id");
-            let _ = fs::write(&share_gist, &new_gist_id);
-            let mut unified = GameConfig::read_unified_config();
-            unified.gist_id = Some(new_gist_id.clone());
-            let _ = GameConfig::write_unified_config(&unified);
-            println!("  🎯 本地同步管道已自動重新錨定至新倉庫！");
-        }
-        Err(e) => {
-            println!("❌ 創建新倉庫失敗: {}", e);
-        }
+    println!("🚀 正在向雲端 Gist 創建並寫入檔案: {}...", filename);
+    match sync_to_gist(&content, filename, &token, verbose) {
+        Ok(_) => println!("✨ 成功在雲端 Gist 創建並寫入檔案: {}", filename),
+        Err(e) => println!("❌ 創建新檔案失敗: {}", e),
     }
 }
 
-// 🗑️ 刪除指定舊 Gist 倉庫：a --delete <gist_id>
+// 🗑️ 刪除 Gist 中的指定檔案：a --delete [文件名]
 fn handle_delete_repo_command(args: &[String], verbose: bool) {
-    println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║       🗑️  Cyber-NOte · 銷毀指定舊 Gist 倉庫                  ║");
-    println!("╚══════════════════════════════════════════════════════════════╝");
-
-    let mut target_gist_id = String::new();
-    for (i, arg) in args.iter().enumerate() {
-        if i < 2 { continue; }
-        if !arg.starts_with('-') {
-            target_gist_id = arg.clone();
-            break;
-        }
-    }
-
-    if target_gist_id.is_empty() {
-        if let Ok(g) = GameConfig::get_gist_id() {
-            target_gist_id = g;
-        }
-    }
-
-    if target_gist_id.is_empty() {
-        println!("❌ 錯誤：請指定欲刪除的 Gist ID。範例: a --delete <gist_id>");
+    if args.len() < 3 {
+        println!("❌ 錯誤：請指定欲刪除的檔案名稱。範例: a --delete hello.txt");
         return;
     }
+    let filename = &args[2];
 
     let token = match get_github_token(verbose) {
         Ok(t) => t,
@@ -399,10 +336,10 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
         }
     };
 
-    println!("🗑️  正在向 GitHub 發送 DELETE 請求銷毀倉庫: {}...", target_gist_id);
-    match delete_gist(&target_gist_id, &token, verbose) {
-        Ok(_) => println!("  💥 倉庫 {} 已在 GitHub 上徹底銷毀！", target_gist_id),
-        Err(e) => println!("  ⚠️  刪除倉庫失敗: {}", e),
+    println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename);
+    match delete_gist_file(filename, &token, verbose) {
+        Ok(_) => println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename),
+        Err(e) => println!("❌ 刪除遠端檔案失敗: {}", e),
     }
 }
 
@@ -2288,8 +2225,8 @@ fn main() {
         println!("      a -p [檔案] --pass [密碼]    #【無密鑰防窮舉】S2K 65,011,712 輪密碼對稱加密");
         println!("      a -p [檔案] -u               #【加密直傳】加密後直接上傳至雲端 Gist");
         println!("      a -x [檔案路徑]              #【解密還原】還原一層加密封裝 (去 .gpg)");
-        println!("      a --new [--clean-slate]        #【創建新倉庫】建立全新 Gist 倉庫徹底抹除歷史版本");
-        println!("      a --delete [gist_id]           #【刪除倉庫】指定刪除遠端 Gist 倉庫");
+        println!("      a --new [文件名] [文件內容]     #【創建新文件】在雲端 Gist 創建/寫入新檔案");
+        println!("      a --delete [文件名]           #【刪除檔案】指定刪除遠端 Gist 倉庫中的檔案");
         println!("      a -k 或 a --ledger           #【金鑰歸檔簿】查看檔案與金鑰審計清單");
         println!("      a -a 或 a --all              #解密並列印今年度主機密文檔");
         println!("      a -a ./[檔案]                #解密並列印【本地密文檔案】");

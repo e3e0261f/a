@@ -54,8 +54,8 @@ export async function executeCommand(
     addLine('  a -d --all                批量下載 GitHub Gist 雲端倉庫全部檔案', 'green');
     addLine('  a -d [檔名] -o [目標路徑]   自訂檔名或加 ./ 下載文件到本地工作目錄', 'green');
     addLine('  a -d [檔名] [-x]          下載雲端檔案 (-x 為自動破甲解密還原)', 'green');
-    addLine('  a --new                   創建新倉庫並抹除歷史版本', 'purple');
-    addLine('  a --delete [gist_id]      指定刪除遠端 Gist 倉庫', 'purple');
+    addLine('  a --new [檔名] [內容]       在雲端 Gist 創建並寫入新檔案', 'purple');
+    addLine('  a --delete [檔名]          指定刪除遠端 Gist 倉庫中的指定檔案', 'purple');
     addLine('  a -r [關鍵字/倒數行/區間]   行級刪除：過濾指定內容重新加密存盤', 'yellow');
     addLine('  a -w / a --web [status/stop] 調度 JS 網頁管理引擎 (可開可關，預設關閉)', 'cyan');
     addLine('  a --set-dir [路徑]         修改本地存儲錨定目錄', 'purple');
