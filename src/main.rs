@@ -1623,8 +1623,85 @@ fn main() {
     if args.len() > 1 && (args[1] == "-s" || args[1] == "--sync") {
         let timer = Instant::now();
         let is_raw = args.iter().any(|arg| arg == "--raw" || arg == "-u");
+        let is_all = args.iter().skip(2).any(|arg| arg == "--all" || arg == "-a");
+
+        if is_all {
+            let token = match get_github_token(verbose) {
+                Ok(t) => t,
+                Err(e) => {
+                    println!("❌ 錯誤：{}", e);
+                    return;
+                }
+            };
+
+            let note_dir = GameConfig::get_note_dir();
+            if !note_dir.exists() {
+                println!("❌ 錯誤：本地筆記目錄不存在 -> {:?}", note_dir);
+                return;
+            }
+
+            println!("📡 [雲端同步] 正在掃描本地筆記目錄 {:?} 進行全部檔案批量同步...", note_dir);
+            let entries = match fs::read_dir(&note_dir) {
+                Ok(e) => e,
+                Err(err) => {
+                    println!("❌ 讀取本地目錄失敗: {}", err);
+                    return;
+                }
+            };
+
+            let mut files_to_sync = Vec::new();
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(name_str) = path.file_name().and_then(|n| n.to_str()) {
+                            if name_str != "config.dae" && name_str != "gist_id" && name_str != "key_id" {
+                                files_to_sync.push((path, name_str.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if files_to_sync.is_empty() {
+                println!("ℹ️ 本地目錄中沒有找到任何檔案可供同步。");
+                return;
+            }
+
+            println!("☁️  [雲端同步] 發現共 {} 個檔案，開始批量推送至 Gist 倉庫...", files_to_sync.len());
+            let mut success_count = 0;
+            for (idx, (path, filename)) in files_to_sync.iter().enumerate() {
+                println!("  [{}/{}] 正在推送: {}...", idx + 1, files_to_sync.len(), filename);
+                let content = match fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        match fs::read(path) {
+                            Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                            Err(e) => {
+                                println!("    ⚠️ 讀取檔案失敗: {}", e);
+                                continue;
+                            }
+                        }
+                    }
+                };
+
+                match sync_to_gist(&content, &filename, &token, verbose) {
+                    Ok(_) => {
+                        println!("    ✨ 推送成功: {}", filename);
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        println!("    ⚠️ 推送失敗 ({}): {}", filename, e);
+                    }
+                }
+            }
+
+            println!("☁️  [GitHub] 批量同步完成！成功同步 {}/{} 個檔案。全流程耗時: {:?}", success_count, files_to_sync.len(), timer.elapsed());
+            return;
+        }
+
         let custom_path_opt = args.iter().skip(2).find(|&arg| {
-            arg != "--raw" && arg != "-u" && arg != "-v" && arg != "-vv" && arg != "--verbose"
+            arg != "--raw" && arg != "-u" && arg != "-v" && arg != "-vv" && arg != "--verbose" && arg != "--all" && arg != "-a"
         });
 
         let (payload_to_send, remote_filename) = if let Some(custom_path) = custom_path_opt {
