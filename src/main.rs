@@ -516,14 +516,26 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
     }
     local_only_files.sort();
 
-    // 格式化大小函式 (超過 9 進位至高一級單位，1位整數 + 1位小數，如 9.9b, 9.9k, 9.9m, 9.9g)
+    // 格式化大小函式：嚴格確保固定 4 字元寬度 (例如 " 42b", "512b", "6.5k", "0.1m") 絕不打亂排版
     let format_size = |bytes: u64| -> String {
         let b = bytes as f64;
-        if b < 10.0 {
-            format!("{:.1}b", b)
+        if b == 0.0 {
+            "  0b".to_string()
+        } else if b < 10.0 {
+            format!("{:>3}b", bytes)
+        } else if b < 100.0 {
+            format!("{:>3}b", bytes)
+        } else if b < 1024.0 {
+            format!("{:>3}b", bytes)
         } else if b < 10.0 * 1024.0 {
             format!("{:.1}k", b / 1024.0)
+        } else if b < 100.0 * 1024.0 {
+            format!("{:.1}k", b / 1024.0)
+        } else if b < 1024.0 * 1024.0 {
+            format!("{:.1}k", b / 1024.0)
         } else if b < 10.0 * 1024.0 * 1024.0 {
+            format!("{:.1}m", b / (1024.0 * 1024.0))
+        } else if b < 1000.0 * 1024.0 * 1024.0 {
             format!("{:.1}m", b / (1024.0 * 1024.0))
         } else {
             format!("{:.1}g", b / (1024.0 * 1024.0 * 1024.0))
