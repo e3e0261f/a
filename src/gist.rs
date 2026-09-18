@@ -110,6 +110,47 @@ pub fn fetch_from_gist(file_name: &str, token: &str, verbose: bool) -> Result<St
     }
 }
 
+pub fn get_gist_commit_hash(token: &str, verbose: bool) -> Result<String, String> {
+    let client = build_client();
+    let url = GameConfig::get_gist_url()?;
+
+    if verbose {
+        println!("  📡 [網路] 正在向 {} 請求最新 Commit Hash...", url);
+    }
+
+    let response = client.get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if !status.is_success() {
+                return Err(format!("❌ 無法獲取 Gist 狀態，狀態碼: {}", status));
+            }
+            let text = res.text().map_err(|e| e.to_string())?;
+            let json_val: Value = serde_json::from_str(&text).map_err(|e| format!("解析 JSON 失敗: {}", e))?;
+            
+            // GitHub Gist API 回傳歷史記錄在 "history" 陣列中，第一個通常是最新 commit
+            if let Some(history) = json_val["history"].as_array() {
+                if let Some(latest) = history.first() {
+                    if let Some(version) = latest["version"].as_str() {
+                        return Ok(version.to_string());
+                    }
+                }
+            }
+            // 若無 history，退而求其次用 updated_at 或隨機 hash
+            if let Some(updated) = json_val["updated_at"].as_str() {
+                return Ok(updated.to_string());
+            }
+            Ok("unknown_commit_hash".to_string())
+        },
+        Err(e) => Err(format!("❌ 請求 Commit Hash 失敗: {}", e)),
+    }
+}
+
 pub fn list_gist_files(token: &str, verbose: bool) -> Result<Vec<String>, String> {
     let client = build_client();
     let url = GameConfig::get_gist_url()?;

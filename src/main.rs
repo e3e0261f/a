@@ -359,23 +359,46 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
 }
 
 // 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k / a -l --sync)
-fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
+fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
     let note_dir = GameConfig::get_note_dir();
     let mut ledger = a::ledger::load_ledger();
+    let mut unified_cfg = GameConfig::read_unified_config();
 
-    // 若指定 sync (a -l --sync 或 a --sync)，則連線遠端 Gist 掃描並更新/持久化金鑰審計簿
-    if sync {
-        let token = match get_github_token(verbose) {
-            Ok(t) => t,
-            Err(e) => {
-                println!("❌ 錯誤：無法取得 GitHub Token: {}", e);
-                a::ledger::print_ledger_table();
-                return;
+    // 取得 GitHub Token
+    let token = match get_github_token(verbose) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("❌ 錯誤：無法取得 GitHub Token: {}", e);
+            a::ledger::print_ledger_table();
+            return;
+        }
+    };
+
+    // 檢查遠端 Gist 的 Commit Hash 是否有變動
+    if !sync {
+        if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, verbose) {
+            let cached_commit = unified_cfg.cached_commit_hash.clone().unwrap_or_default();
+            if remote_commit != cached_commit {
+                if verbose {
+                    println!("📡 [Commit Hash 偵測] 發現遠端 Gist Commit Hash 變動 (本地: {}, 遠端: {})，自動觸發同步...", cached_commit, remote_commit);
+                }
+                sync = true;
+                unified_cfg.cached_commit_hash = Some(remote_commit);
+                let _ = GameConfig::write_unified_config(&unified_cfg);
             }
-        };
+        }
+    }
 
-        println!("📡 [雲端與金鑰鑑識 Sync] 正在掃描 GitHub Gist 倉庫檔案清單...");
-        if let Ok(files) = list_gist_files(&token, verbose) {
+    // 若指定 sync 或 Commit Hash 不同，則連線遠端 Gist 掃描並更新/持久化金鑰審計簿
+    if sync {
+        println!("📡 [雲端與金鑰鑑識 Sync] 正在連線 GitHub Gist 獲取最新遠端檔案清單...");
+        if let Ok(files) = a::gist::list_gist_files(&token, verbose) {
+            // 更新 commit hash cache
+            if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, false) {
+                unified_cfg.cached_commit_hash = Some(remote_commit);
+                let _ = GameConfig::write_unified_config(&unified_cfg);
+            }
+
             for filename in files {
                 let is_gpg = filename.ends_with(".gpg");
                 let local_path = note_dir.join(&filename);
@@ -415,7 +438,7 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
                         }
                     } else {
                         // 實在萬不得已，自雲端下載臨時快取以識別金鑰短碼
-                        if let Ok(content) = fetch_from_gist(&filename, &token, false) {
+                        if let Ok(content) = a::gist::fetch_from_gist(&filename, &token, false) {
                             let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
                             if fs::write(&temp_path, content.as_bytes()).is_ok() {
                                 let extracted = a::ledger::extract_key_id_from_gpg_file(&temp_path);
@@ -442,56 +465,47 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
                     0,
                     1,
                     &vec![0u8; size],
-                    "Synced via a -l --sync",
+                    "Synced via Gist alignment",
                 );
             }
             ledger = a::ledger::load_ledger(); // 重新載入更新後的持久化 ledger
         }
     }
 
+    // 嚴格對齊 style.txt 風格的清單收集：直接以遠端或已同步的雲端清單為準
     let mut file_names: Vec<String> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&note_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                if !name.starts_with('.') && !file_names.iter().any(|f| f == name) {
-                    file_names.push(name.to_string());
-                }
+    if sync {
+        if let Ok(files) = a::gist::list_gist_files(&token, false) {
+            file_names = files;
+        }
+    }
+    // 如果未強制 sync 且未觸發 commit hash 變動，則從 ledger 中撈取已同步的遠端清單作為畫面清單
+    if file_names.is_empty() {
+        for r in &ledger.records {
+            if !file_names.iter().any(|f| f == &r.file_name) {
+                file_names.push(r.file_name.clone());
             }
         }
     }
-    for r in &ledger.records {
-        if !file_names.iter().any(|f| f == &r.file_name) {
-            file_names.push(r.file_name.clone());
+    // 如果 ledger 也是空的，退而求其次才讀取本地目錄
+    if file_names.is_empty() {
+        if let Ok(entries) = fs::read_dir(&note_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                    if !name.starts_with('.') && !file_names.iter().any(|f| f == name) {
+                        file_names.push(name.to_string());
+                    }
+                }
+            }
         }
     }
     file_names.sort();
 
-    // 檢查是否所有 gpg 檔案都缺少短碼，若皆無短碼則自動壓縮（隱藏）短碼欄位以優化排版
-    let mut has_any_key = false;
-    for filename in &file_names {
-        if filename.ends_with(".gpg") {
-            if let Some(entry) = ledger.records.iter().find(|r| &r.file_name == filename) {
-                if !entry.key_id.is_empty() && entry.key_id != "-" {
-                    has_any_key = true;
-                }
-            }
-        }
-    }
-
-    // 顯示精緻美化外框與絕對對齊表格
-    if has_any_key {
-        println!("┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
-        println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                                 │");
-        println!("├─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-        println!("{:<6} {:<34} {:<12} {:<14} {:<40}", "編號", "檔案名稱", "金鑰短碼", "檔案狀態", "最高級別暴力破解推算時間");
-        println!("{:-<6} {:-<34} {:-<12} {:-<14} {:-<40}", "", "", "", "", "");
-    } else {
-        println!("┌─────────────────────────────────────────────────────────────────────────────────────────────┐");
-        println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                 │");
-        println!("├─────────────────────────────────────────────────────────────────────────────────────────────┘");
-        println!("{:<6} {:<36} {:<16} {:<40}", "編號", "檔案名稱", "檔案狀態", "最高級別暴力破解推算時間");
-        println!("{:-<6} {:-<36} {:-<16} {:-<40}", "", "", "", "");
-    }
+    // 依照 style.txt 規範格式輸出表格
+    println!(" 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)");
+    println!("---- -- ---------------- ---- -------------------------------------------------------------------------------");
+    println!("{:<4} {:<2} {:<16} {:<4} {:<75}", "編號", "加密状态", "短碼", "大小", "檔案名稱");
+    println!("---- -- ---------------- ---- -------------------------------------------------------------------------------");
 
     for (idx, filename) in file_names.iter().enumerate() {
         let local_path = note_dir.join(filename);
@@ -504,56 +518,47 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
             key_id = "-".to_string();
         }
 
-        // 將 16/40 位長金鑰縮短為 8 位短碼 (例如 FA9B204A 或 31C81A9D)
         let short_key = if key_id.len() > 8 && key_id != "-" {
             key_id[key_id.len() - 8..].to_string()
         } else if key_id.is_empty() {
-            "-".to_string()
+            "未同步".to_string()
         } else {
             key_id
         };
 
-        let size_str = if local_path.exists() {
-            let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
-            format!("{} B", size)
+        let status_icon = if !is_gpg {
+            "📄 明文"
+        } else if short_key == "未同步" {
+            "⚠️ 待同步"
         } else {
-            "雲端存儲".to_string()
+            "🛡️ GPG/RSA"
         };
 
-        let crack_time = if !is_gpg {
-            "明文或純文字 (不適用加密)"
-        } else if !short_key.is_empty() && short_key != "-" {
-            "約 1.2 × 10^32 年 (量子抗性 RSA/ECC)"
+        let size_str = if local_path.exists() {
+            let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+            if size > 1024 * 1024 {
+                format!("{:.1}M", size as f64 / (1024.0 * 1024.0))
+            } else if size > 1024 {
+                format!("{:.1}K", size as f64 / 1024.0)
+            } else {
+                format!("{}B", size)
+            }
         } else {
-            "尚未同步短碼 (請執行 a -l --sync)"
+            "雲端".to_string()
         };
 
         let idx_str = format!("[{:02}]", idx + 1);
 
-        if has_any_key {
-            println!(
-                "{:<6} {:<34} {:<12} {:<14} {:<40}",
-                idx_str,
-                filename,
-                short_key,
-                size_str,
-                crack_time
-            );
-        } else {
-            println!(
-                "{:<6} {:<36} {:<16} {:<40}",
-                idx_str,
-                filename,
-                size_str,
-                crack_time
-            );
-        }
+        println!(
+            "{:<4} {:<8} {:<16} {:<6} {:<75}",
+            idx_str,
+            status_icon,
+            short_key,
+            size_str,
+            filename
+        );
     }
-    if has_any_key {
-        println!("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-    } else {
-        println!("└─────────────────────────────────────────────────────────────────────────────────────────────┘");
-    }
+    println!("─────────────────────────────────────────────────────────────────────────────────────────────────────────────");
     println!("💡 快速檢索: 'a -l' | 強制同步更新: 'a -l --sync' | 下載: 'a -d [編號或檔名]' | 刪除: 'a --delete [編號或檔名]'");
 }
 
