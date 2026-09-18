@@ -374,11 +374,33 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
             }
         };
 
-        println!("📡 [雲端與金鑰鑑識 Sync] 正在掃描 GitHub Gist 倉庫檔案清單並更新金鑰審計簿...");
+        println!("📡 [雲端與金鑰鑑識 Sync] 正在掃描 GitHub Gist 倉庫檔案清單...");
         if let Ok(files) = list_gist_files(&token, verbose) {
             for filename in files {
                 let is_gpg = filename.ends_with(".gpg");
                 let local_path = note_dir.join(&filename);
+                
+                // 檢查本地 ledger 是否已經有完整且有效的短碼資訊
+                let existing_record = ledger.records.iter().find(|r| r.file_name == filename);
+                let has_valid_key = if let Some(rec) = existing_record {
+                    if is_gpg {
+                        !rec.key_id.is_empty() && rec.key_id != "-" && !rec.key_id.contains("未知")
+                    } else {
+                        true // 明文檔案本就完整
+                    }
+                } else {
+                    false
+                };
+
+                // 如果本地信息已經完整（已有短碼），則跳過遠端檢查或下載，直接保留本地資訊
+                if has_valid_key {
+                    if verbose {
+                        println!("⚡ [略過已同步] 檔案 {} 於本地已有完整短碼資訊，略過重複檢索。", filename);
+                    }
+                    continue;
+                }
+
+                println!("🔍 [同步鑑識] 正在識別新檔案或補充短碼: {}...", filename);
                 let mut key_id = String::new();
                 let mut cipher_mode = "GPG_ENCRYPTED".to_string();
 
@@ -386,11 +408,7 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
                     key_id = "-".to_string();
                     cipher_mode = "PLAINTEXT".to_string();
                 } else {
-                    // 優先從本地持久化 ledger 中讀取已知的 key_id
-                    if let Some(existing) = ledger.records.iter().find(|r| r.file_name == filename && !r.key_id.is_empty() && r.key_id != "-") {
-                        key_id = existing.key_id.clone();
-                        cipher_mode = existing.cipher_mode.clone();
-                    } else if local_path.exists() {
+                    if local_path.exists() {
                         let extracted = a::ledger::extract_key_id_from_gpg_file(&local_path);
                         if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
                             key_id = extracted;
@@ -460,19 +478,19 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
         }
     }
 
-    // 顯示精美極簡外框與對齊表格
+    // 顯示精緻美化外框與絕對對齊表格
     if has_any_key {
         println!("┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
         println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                                 │");
         println!("├─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-        println!("{:<5} {:<34} {:<12} {:<14} {:<42}", "編號", "檔案名稱", "短碼", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
-        println!("{:-<5} {:-<34} {:-<12} {:-<14} {:-<42}", "", "", "", "", "");
+        println!("{:<6} {:<34} {:<12} {:<14} {:<40}", "編號", "檔案名稱", "金鑰短碼", "檔案狀態", "最高級別暴力破解推算時間");
+        println!("{:-<6} {:-<34} {:-<12} {:-<14} {:-<40}", "", "", "", "", "");
     } else {
         println!("┌─────────────────────────────────────────────────────────────────────────────────────────────┐");
         println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                 │");
         println!("├─────────────────────────────────────────────────────────────────────────────────────────────┘");
-        println!("{:<5} {:<36} {:<16} {:<42}", "編號", "檔案名稱", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
-        println!("{:-<5} {:-<36} {:-<16} {:-<42}", "", "", "", "");
+        println!("{:<6} {:<36} {:<16} {:<40}", "編號", "檔案名稱", "檔案狀態", "最高級別暴力破解推算時間");
+        println!("{:-<6} {:-<36} {:-<16} {:-<40}", "", "", "", "");
     }
 
     for (idx, filename) in file_names.iter().enumerate() {
@@ -505,16 +523,16 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
         let crack_time = if !is_gpg {
             "明文或純文字 (不適用加密)"
         } else if !short_key.is_empty() && short_key != "-" {
-            "約 1.2 × 10^32 年 (Quantum-Resistant RSA/ECC)"
+            "約 1.2 × 10^32 年 (量子抗性 RSA/ECC)"
         } else {
             "尚未同步短碼 (請執行 a -l --sync)"
         };
 
-        let idx_str = format!("[{}]", idx + 1);
+        let idx_str = format!("[{:02}]", idx + 1);
 
         if has_any_key {
             println!(
-                "{:<5} {:<34} {:<12} {:<14} {:<42}",
+                "{:<6} {:<34} {:<12} {:<14} {:<40}",
                 idx_str,
                 filename,
                 short_key,
@@ -523,7 +541,7 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
             );
         } else {
             println!(
-                "{:<5} {:<36} {:<16} {:<42}",
+                "{:<6} {:<36} {:<16} {:<40}",
                 idx_str,
                 filename,
                 size_str,
