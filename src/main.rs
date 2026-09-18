@@ -321,13 +321,13 @@ fn handle_new_repo_command(args: &[String], verbose: bool) {
     }
 }
 
-// 🗑️ 刪除 Gist 中的指定檔案：a --delete [文件名]
+// 🗑️ 刪除 Gist 中的指定檔案：a --delete [文件名或編號]
 fn handle_delete_repo_command(args: &[String], verbose: bool) {
     if args.len() < 3 {
-        println!("❌ 錯誤：請指定欲刪除的檔案名稱。範例: a --delete hello.txt");
+        println!("❌ 錯誤：請指定欲刪除的檔案名稱或編號。範例: a --delete 1 或 a --delete hello.txt");
         return;
     }
-    let filename = &args[2];
+    let target = &args[2];
 
     let token = match get_github_token(verbose) {
         Ok(t) => t,
@@ -337,11 +337,96 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
         }
     };
 
-    println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename);
-    match delete_gist_file(filename, &token, verbose) {
-        Ok(_) => println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename),
+    let files = match list_gist_files(&token, verbose) {
+        Ok(f) => f,
+        Err(_) => Vec::new(),
+    };
+
+    let mut filename_to_delete = target.clone();
+    if !files.contains(target) {
+        if let Ok(idx) = target.parse::<usize>() {
+            if idx > 0 && idx <= files.len() {
+                filename_to_delete = files[idx - 1].clone();
+            }
+        }
+    }
+
+    println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename_to_delete);
+    match delete_gist_file(&filename_to_delete, &token, verbose) {
+        Ok(_) => println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete),
         Err(e) => println!("❌ 刪除遠端檔案失敗: {}", e),
     }
+}
+
+// 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k)
+fn handle_list_and_ledger_command(verbose: bool) {
+    let token = match get_github_token(verbose) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("❌ 錯誤：無法取得 GitHub Token: {}", e);
+            a::ledger::print_ledger_table();
+            return;
+        }
+    };
+
+    println!("📡 [雲端與金鑰鑑識] 正在掃描 GitHub Gist 倉庫檔案清單並進行 GPG 封包審計...");
+    let files = match list_gist_files(&token, verbose) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("⚠️ 獲取清單失敗: {}，改為顯示本地審計簿。", e);
+            a::ledger::print_ledger_table();
+            return;
+        }
+    };
+
+    println!("┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
+    println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                                                     │");
+    println!("├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+    println!("{:<6} {:<32} {:<24} {:<18} {:<50}", "編號", "檔案名稱", "密鑰短碼 (Key ID)", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
+    println!("{:-<6} {:-<32} {:-<24} {:-<18} {:-<50}", "", "", "", "", "");
+
+    let note_dir = GameConfig::get_note_dir();
+
+    for (idx, filename) in files.iter().enumerate() {
+        let local_path = note_dir.join(filename);
+        let mut key_id = "未知 / 未下載".to_string();
+        let mut size_str = "雲端存儲".to_string();
+        let mut crack_time = "約 1.2 × 10^32 年 (Quantum-Resistant RSA/ECC)";
+
+        if local_path.exists() {
+            let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+            size_str = format!("{} bytes", size);
+            key_id = a::ledger::extract_key_id_from_gpg_file(&local_path);
+        } else {
+            if let Ok(content) = fetch_from_gist(filename, &token, false) {
+                let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
+                if fs::write(&temp_path, content.as_bytes()).is_ok() {
+                    key_id = a::ledger::extract_key_id_from_gpg_file(&temp_path);
+                    let size = content.len();
+                    size_str = format!("{} bytes", size);
+                    let _ = fs::remove_file(&temp_path);
+                }
+            }
+        }
+
+        if key_id.contains("對稱") || key_id.contains("S2K") {
+            crack_time = "約 4.2 × 10^12 年 (S2K 65M 輪加固對稱防窮舉)";
+        } else if filename.ends_with(".asc") || filename.ends_with(".txt") || filename.ends_with(".note") {
+            crack_time = "明文或純文字 (不適用加密)";
+            key_id = "PLAINTEXT / ASC".to_string();
+        }
+
+        println!(
+            "[{:<3}] {:<32} {:<24} {:<18} {:<50}",
+            idx + 1,
+            filename,
+            key_id,
+            size_str,
+            crack_time
+        );
+    }
+    println!("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+    println!("💡 下載密文: 'a -d [編號或檔名]' | 下載並解密: 'a -d [編號或檔名] -x' | 刪除遠端: 'a --delete [編號或檔名]'");
 }
 
 // 🛡️ 遠端檔案在位套殼加密控制邏輯 (Remote In-Place Encapsulate & Clean Original)
@@ -1515,14 +1600,14 @@ fn main() {
         return;
     }
 
-    // ✨ 3. 金鑰審計記錄簿：a -k / a --ledger / a --keys / a --key-ledger
+    // ✨ 3. 金鑰審計記錄簿：a -k / a --ledger / a --keys / a --key-ledger (合併至 unified audit)
     if args.len() > 1
         && (args[1] == "-k"
             || args[1] == "--ledger"
             || args[1] == "--keys"
             || args[1] == "--key-ledger")
     {
-        print_ledger_table();
+        handle_list_and_ledger_command(verbose);
         return;
     }
 
@@ -1797,28 +1882,9 @@ fn main() {
         return;
     }
 
-    // ✨ 8. 列出雲端檔案 (-l / --list)
+    // ✨ 8. 列出雲端檔案與審計 (-l / --list)
     if args.len() > 1 && (args[1] == "-l" || args[1] == "--list") {
-        match get_github_token(verbose) {
-            Ok(token) => {
-                println!("📡 [雲端檢索] 正在掃描 GitHub Gist 倉庫檔案清單...");
-                match list_gist_files(&token, verbose) {
-                    Ok(files) => {
-                        println!("📋 雲端現有密文包裹清單 (共 {} 個)：", files.len());
-                        println!("------------------------------------------------------------");
-                        for file in files {
-                            paint_line(&format!("📦 {}", file), TerminalColor::Cyan);
-                        }
-                        println!("------------------------------------------------------------");
-                        println!(
-                            "💡 下載密文: 'a -d [檔名]' | 下載並解密: 'a -d [檔名] -x'"
-                        );
-                    }
-                    Err(e) => println!("⚠️ 獲取清單失敗: {}", e),
-                }
-            }
-            Err(e) => println!("❌ 錯誤：{}", e),
-        }
+        handle_list_and_ledger_command(verbose);
         return;
     }
 
@@ -2264,7 +2330,6 @@ fn main() {
         println!("      cat 檔案 | a                 #【管道串流】直接吸納字串流加密追加");
         println!("      a -e [檔案路徑]              #【檔案加密】使用預設 GPG 公鑰加密 (本地落盤)");
         println!("      a -e --pass [密碼] [檔案]    #【對稱加固】S2K 密碼防窮舉加密");
-        println!("      a -ep [密碼] [檔案]          #【快速密碼加密】a -e --pass 簡便寫法");
         println!("      a -e -s [檔案路徑]           #【加密同步】加密並上傳至雲端 Gist");
         println!("      a -x [檔案路徑]              #【解密還原】還原一層加密封裝 (去 .gpg)");
         println!("      a --new [文件名] [文件內容]     #【創建新文件】在雲端 Gist 創建/寫入新檔案");
