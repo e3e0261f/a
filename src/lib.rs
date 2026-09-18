@@ -9,6 +9,7 @@ pub mod storage;
 pub mod gist;
 pub mod encrypt;
 pub mod ledger;
+pub mod totp;
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 pub struct AppUnifiedConfig {

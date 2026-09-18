@@ -19,6 +19,7 @@ use a::gist::{
     fetch_from_gist, list_gist_files, sync_to_gist,
 };
 use a::ledger::{compute_sha256, print_ledger_table, record_ledger_entry};
+use a::totp::handle_totp_command;
 use a::{
     color::{paint_line, TerminalColor},
     storage::{read_note, write_encrypted_note},
@@ -1443,6 +1444,12 @@ fn main() {
         return;
     }
 
+    // ✨ 2.53 雙重認證 TOTP 管理與查詢：a -t / --totp
+    if args.len() > 1 && (args[1] == "-t" || args[1] == "--totp" || args[1] == "totp") {
+        handle_totp_command(&args, verbose);
+        return;
+    }
+
     // ✨ 2.6 遠端檔案在位套殼加密 (--remote-encrypt / --encapsulate-remote / a -p --remote)
     if args.len() > 1
         && (args[1] == "--remote-encrypt"
@@ -2227,6 +2234,9 @@ fn main() {
         println!("      a -x [檔案路徑]              #【解密還原】還原一層加密封裝 (去 .gpg)");
         println!("      a --new [文件名] [文件內容]     #【創建新文件】在雲端 Gist 創建/寫入新檔案");
         println!("      a --delete [文件名]           #【刪除檔案】指定刪除遠端 Gist 倉庫中的檔案");
+        println!("      a -t 或 a -t [標籤]            #【TOTP 雙重認證】列出或輸出指定驗證碼");
+        println!("      a -t --add [標籤] --code [密鑰] #【新增 TOTP】註冊驗證密鑰");
+        println!("      a -t --delete [標籤]           #【刪除 TOTP】移除指定標籤驗證密鑰");
         println!("      a -k 或 a --ledger           #【金鑰歸檔簿】查看檔案與金鑰審計清單");
         println!("      a -a 或 a --all              #解密並列印今年度主機密文檔");
         println!("      a -a ./[檔案]                #解密並列印【本地密文檔案】");
