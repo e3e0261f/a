@@ -1,5 +1,5 @@
 // src/ledger.rs
-// Cyber-NOte 金鑰審計與加密檔案歸檔模組
+// Cyber-NOte 金鑰審計與加密檔案歸檔模組 (支援 GPG Packet 封包解析)
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -14,9 +14,9 @@ pub struct KeyLedgerEntry {
     pub file_name: String,
     pub target_path: String,
     pub key_id: String,
-    pub cipher_mode: String, // "GPG_PUBLIC_KEY" 或 "GPG_SYMMETRIC_S2K"
-    pub iterations: u64,     // S2K 迭代輪數，例如 65011712
-    pub layer: u32,          // 巢狀封裝層級 (1, 2, 3...)
+    pub cipher_mode: String,
+    pub iterations: u64,
+    pub layer: u32,
     pub timestamp: String,
     pub file_size_bytes: usize,
     pub sha256: String,
@@ -65,93 +65,66 @@ pub fn load_ledger() -> KeyLedger {
     KeyLedger::default()
 }
 
-pub fn record_ledger_entry(
-    file_name: &str,
-    target_path: &str,
-    key_id: &str,
-    cipher_mode: &str,
-    iterations: u64,
-    layer: u32,
-    data: &[u8],
-    notes: &str,
-) -> Result<(), String> {
-    let mut ledger = load_ledger();
-    let now = Local::now();
-    let id = format!("REC-{}-{}", now.format("%Y%m%d%H%M%S"), now.timestamp_subsec_millis());
-    let sha256 = compute_sha256(data);
-
-    let entry = KeyLedgerEntry {
-        id,
-        file_name: file_name.to_string(),
-        target_path: target_path.to_string(),
-        key_id: key_id.to_string(),
-        cipher_mode: cipher_mode.to_string(),
-        iterations,
-        layer,
-        timestamp: now.to_rfc3339(),
-        file_size_bytes: data.len(),
-        sha256,
-        notes: notes.to_string(),
-    };
-
-    // 如果該檔案已存在舊記錄，更新或新增審計記錄
-    ledger.records.retain(|r| !(r.file_name == file_name && r.layer == layer));
-    ledger.records.push(entry);
-    ledger.updated_at = now.to_rfc3339();
-
-    let path = get_ledger_path();
-    let json = serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?;
-    fs::write(&path, &json).map_err(|e| format!("無法寫入金鑰歸檔簿: {}", e))?;
-
-    Ok(())
+pub fn extract_key_id_from_gpg_file(path: &std::path::Path) -> String {
+    if let Ok(output) = std::process::Command::new("gpg")
+        .arg("--list-packets")
+        .arg(path)
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}\n{}", stdout, stderr);
+        for line in combined.lines() {
+            if line.contains("keyid") || line.contains("key ID") || line.contains("issuer") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                for part in parts {
+                    if part.len() >= 8 && part.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return part.to_string();
+                    }
+                }
+            }
+        }
+    }
+    "對稱加固 (S2K) 或 GPG 封包".to_string()
 }
 
 pub fn print_ledger_table() {
-    let ledger = load_ledger();
     println!("┌────────────────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ 🛡️  Cyber-NOte 金鑰歸檔審計簿 (Key Ledger Manifest)                                    │");
+    println!("│ 🛡️  Cyber-NOte 金鑰歸檔審計簿 (Key Ledger Manifest & GPG Packet Inspection)            │");
     println!("├────────────────────────────────────────────────────────────────────────────────────────┤");
-    println!("│ 系統標識 : {:<74} │", ledger.system);
-    println!("│ 存檔路徑 : {:<74} │", get_ledger_path().to_str().unwrap_or(""));
-    println!("│ 記錄總數 : {:<74} │", ledger.records.len());
-    println!("└────────────────────────────────────────────────────────────────────────────────────────┘");
+    
+    let note_dir = GameConfig::get_note_dir();
+    let mut gpg_files = Vec::new();
+    if let Ok(entries) = fs::read_dir(&note_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".gpg") {
+                        gpg_files.push((name.to_string(), path));
+                    }
+                }
+            }
+        }
+    }
 
-    if ledger.records.is_empty() {
-        println!("  (尚無檔案加密歸檔記錄)");
+    if gpg_files.is_empty() {
+        println!("  (尚無本地 .gpg 加密檔案供審計)");
+        println!("└────────────────────────────────────────────────────────────────────────────────────────┘");
         return;
     }
 
-    println!("{:<22} {:<10} {:<24} {:<12} {:<12}", "檔案名稱", "封裝層級", "鎖定金鑰 ID / 模式", "S2K 迭代次數", "時間戳記");
-    println!("{:-<22} {:-<10} {:-<24} {:-<12} {:-<12}", "", "", "", "", "");
-    for rec in ledger.records.iter().rev() {
-        let key_display = if rec.cipher_mode == "GPG_SYMMETRIC_S2K" {
-            "S2K-對稱密碼".to_string()
-        } else if rec.key_id.len() > 20 {
-            format!("{}...", &rec.key_id[..18])
-        } else {
-            rec.key_id.clone()
-        };
-
-        let iter_display = if rec.iterations > 0 {
-            format!("{} 輪", rec.iterations)
-        } else {
-            "-".to_string()
-        };
-
-        let time_display = if rec.timestamp.len() >= 19 {
-            &rec.timestamp[..19]
-        } else {
-            &rec.timestamp
-        };
-
+    println!("{:<28} {:<36} {:<24}", "加密檔案名稱", "GPG Packet 封包解析金鑰 ID", "檔案狀態");
+    println!("{:-<28} {:-<36} {:-<24}", "", "", "");
+    for (name, path) in gpg_files {
+        let key_id = extract_key_id_from_gpg_file(&path);
+        let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         println!(
-            "{:<22} {:<10} {:<24} {:<12} {:<12}",
-            rec.file_name,
-            format!("Layer {}", rec.layer),
-            key_display,
-            iter_display,
-            time_display
+            "{:<28} {:<36} {:<24}",
+            name,
+            key_id,
+            format!("{} bytes (正常)", size)
         );
     }
-    println!();
+    println!("└────────────────────────────────────────────────────────────────────────────────────────┘");
 }
