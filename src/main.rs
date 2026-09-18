@@ -1101,42 +1101,75 @@ fn get_embedded_dashboard_html() -> &'static str {
 }
 
 
-// 🛡️ 新增功能：a -p 檔案加密（支援普通文本、.gpg 巢狀多層加密、無金鑰密碼防窮舉加固與直接上傳）
-fn handle_protect_command(args: &[String], verbose: bool) {
+// 🛡️ 檔案加密：a -e, a -ep (支援普通文本、.gpg 巢狀多層加密、金鑰 ID 指定、密碼防窮舉加固與可選 -s 同步上傳)
+fn handle_encrypt_command(args: &[String], verbose: bool) {
+    if args.len() < 3 {
+        println!("❌ 錯誤：參數不足，目標動作不明確。");
+        println!("💡 正確用法範例:");
+        println!("   a -e <檔案路徑>            # 使用預設 GPG 公鑰加密 (本地落盤)");
+        println!("   a -e --pass <密碼> <檔案>  # 使用 S2K 對稱密碼加固加密");
+        println!("   a -ep <密碼> <檔案>        # 快速密碼加密 (a -e --pass 簡便寫法)");
+        println!("   a -e --id <key_id> <檔案>  # 指定非預設金鑰 ID 加密");
+        println!("   a -e -s <檔案路徑>         # 加密並同步上傳至雲端 Gist");
+        return;
+    }
+
+    let is_ep = args[1] == "-ep";
     let mut file_path_opt: Option<&str> = None;
     let mut pass_opt: Option<String> = None;
+    let mut key_id_opt: Option<String> = None;
     let mut iter_opt: Option<u64> = None;
     let mut upload = false;
     let mut out_path_opt: Option<&str> = None;
 
-    let mut skip_next = false;
-    for (i, arg) in args.iter().enumerate() {
-        if i == 0 || i == 1 {
-            continue;
+    if is_ep {
+        if args.len() < 4 {
+            println!("❌ 錯誤：a -ep 參數不足。");
+            println!("💡 範例: a -ep 密碼 1.txt");
+            return;
         }
-        if skip_next {
-            skip_next = false;
-            continue;
+        pass_opt = Some(args[2].clone());
+        file_path_opt = Some(&args[3]);
+        for arg in args.iter().skip(4) {
+            if arg == "-s" || arg == "-u" || arg == "--sync" || arg == "--upload" {
+                upload = true;
+            }
         }
-        if arg == "--pass" || arg == "-P" || arg == "--password" {
-            if i + 1 < args.len() {
-                pass_opt = Some(args[i + 1].clone());
-                skip_next = true;
+    } else {
+        let mut skip_next = false;
+        for (i, arg) in args.iter().enumerate() {
+            if i == 0 || i == 1 {
+                continue;
             }
-        } else if arg == "--iter" || arg == "--iterations" {
-            if i + 1 < args.len() {
-                iter_opt = args[i + 1].parse::<u64>().ok();
-                skip_next = true;
+            if skip_next {
+                skip_next = false;
+                continue;
             }
-        } else if arg == "--out" || arg == "-o" {
-            if i + 1 < args.len() {
-                out_path_opt = Some(&args[i + 1]);
-                skip_next = true;
+            if arg == "--pass" || arg == "-P" || arg == "--password" || arg == "-p" {
+                if i + 1 < args.len() {
+                    pass_opt = Some(args[i + 1].clone());
+                    skip_next = true;
+                }
+            } else if arg == "--id" || arg == "--key" {
+                if i + 1 < args.len() {
+                    key_id_opt = Some(args[i + 1].clone());
+                    skip_next = true;
+                }
+            } else if arg == "--iter" || arg == "--iterations" {
+                if i + 1 < args.len() {
+                    iter_opt = args[i + 1].parse::<u64>().ok();
+                    skip_next = true;
+                }
+            } else if arg == "--out" || arg == "-o" {
+                if i + 1 < args.len() {
+                    out_path_opt = Some(&args[i + 1]);
+                    skip_next = true;
+                }
+            } else if arg == "-u" || arg == "--upload" || arg == "-s" || arg == "--sync" {
+                upload = true;
+            } else if !arg.starts_with('-') && file_path_opt.is_none() {
+                file_path_opt = Some(arg);
             }
-        } else if arg == "-u" || arg == "--upload" || arg == "-s" || arg == "--sync" {
-            upload = true;
-        } else if !arg.starts_with('-') && file_path_opt.is_none() {
-            file_path_opt = Some(arg);
         }
     }
 
@@ -1144,10 +1177,7 @@ fn handle_protect_command(args: &[String], verbose: bool) {
         Some(f) => f,
         None => {
             println!("❌ 錯誤：請指定欲加密的檔案路徑。");
-            println!("   範例 1 (一般檔案):   a -p 1.txt");
-            println!("   範例 2 (巢狀加套一層): a -p 1.gpg");
-            println!("   範例 3 (密碼防窮舉): a -p 1.txt --pass 密碼 --iter 65011712");
-            println!("   範例 4 (無密鑰加密上傳): a -p 1.txt --pass 密碼 -u");
+            println!("💡 範例: a -e 1.txt 或 a -e --pass 密碼 1.txt 或 a -ep 密碼 1.txt");
             return;
         }
     };
@@ -1166,7 +1196,6 @@ fn handle_protect_command(args: &[String], verbose: bool) {
         }
     };
 
-    // 計算現有層級與目標輸出路徑
     let current_layer = calculate_gpg_layer(target_file);
     let target_layer = current_layer + 1;
 
@@ -1178,11 +1207,11 @@ fn handle_protect_command(args: &[String], verbose: bool) {
         .and_then(|n| n.to_str())
         .unwrap_or(out_file_path);
 
-    let gpg_key_result = GameConfig::get_gpg_user_id();
+    let default_key = GameConfig::get_gpg_user_id();
+    let active_key = key_id_opt.or(default_key.ok());
     let s2k_count = iter_opt.unwrap_or(DEFAULT_S2K_COUNT);
 
     let (ciphertext, cipher_mode, key_id_used, iterations_used) = if let Some(pass) = pass_opt {
-        // 使用者明確指定對稱密碼防窮舉加固加密
         println!(
             "🔐 加密體系: GPG 對稱密碼加固 (S2K 模式 3 / {} 輪迭代運算，防窮舉破解)...",
             s2k_count
@@ -1199,9 +1228,8 @@ fn handle_protect_command(args: &[String], verbose: bool) {
                 return;
             }
         }
-    } else if let Ok(gpg_key) = gpg_key_result {
-        // 使用系統已鎖定的 GPG 公鑰
-        println!("🔐 加密體系: 系統鎖定 GPG 公鑰 (Key ID: {})...", gpg_key);
+    } else if let Some(gpg_key) = active_key {
+        println!("🔐 加密體系: GPG 公鑰加密 (Key ID: {})...", gpg_key);
         match encrypt_with_gpg(&raw_bytes, &gpg_key) {
             Ok(c) => (c, "GPG_PUBLIC_KEY".to_string(), gpg_key, 0),
             Err(e) => {
@@ -1210,8 +1238,7 @@ fn handle_protect_command(args: &[String], verbose: bool) {
             }
         }
     } else {
-        // 無金鑰模式：提示設定對稱加密密碼並加固迭代
-        println!("ℹ️  未配置鎖定 GPG 公鑰，啟用無金鑰高強度對稱加密模式。");
+        println!("ℹ️  未配置或未指定 GPG 公鑰，啟用高強度對稱加密模式。");
         print!("🔑 請設定防窮舉加密密碼 (預設 S2K 65,011,712 輪加固): ");
         io::stdout().flush().unwrap();
         let mut pass_input = String::new();
@@ -1235,13 +1262,11 @@ fn handle_protect_command(args: &[String], verbose: bool) {
         }
     };
 
-    // 寫入加密密文落盤
     if let Err(e) = fs::write(out_path_obj, ciphertext.as_bytes()) {
         println!("❌ 寫入加密檔案失敗: {}", e);
         return;
     }
 
-    // 留黨存檔：寫入金鑰歸檔簿 (Key Ledger)
     let notes = if target_layer > 1 {
         format!("第 {} 層巢狀多重加密封裝", target_layer)
     } else {
@@ -1298,7 +1323,7 @@ fn handle_protect_command(args: &[String], verbose: bool) {
     println!("│ 金鑰審計 : {:<64} │", "已鎖定存檔至金鑰歸檔簿 (Key Ledger)");
     println!("└────────────────────────────────────────────────────────────────────────────┘");
 
-    // 若指定 -u / --upload，同步上傳至 Gist 雲端
+    // 若指定 -s / --sync，同步上傳至 Gist 雲端
     if upload {
         match get_github_token(verbose) {
             Ok(token) => {
@@ -1310,6 +1335,8 @@ fn handle_protect_command(args: &[String], verbose: bool) {
             }
             Err(e) => println!("❌ 雲端憑證讀取失敗，略過上傳: {}", e),
         }
+    } else {
+        println!("💡 提示：未加 -s 參數，僅在本地完成加密落盤，無雲端上傳動作。");
     }
 }
 
@@ -1420,9 +1447,16 @@ fn main() {
         return;
     }
 
-    // ✨ 1. 新增功能：a -p 檔案加密（支援普通文本、.gpg 巢狀多層加密、密碼防窮舉加固與直接上傳）
+    // ✨ 1. 檔案加密：a -e, a -ep (支援 --pass, --id, -s 同步)
+    if args.len() > 1 && (args[1] == "-e" || args[1] == "-ep" || args[1] == "--encrypt" || args[1] == "encrypt") {
+        handle_encrypt_command(&args, verbose);
+        return;
+    }
+
     if args.len() > 1 && (args[1] == "-p" || args[1] == "--protect" || args[1] == "protect") {
-        handle_protect_command(&args, verbose);
+        println!("❌ 錯誤：單獨使用 -p 已廢止。-p 現僅作為 --pass 的簡寫。");
+        println!("💡 若要加密檔案，請使用: a -e <檔案路徑>");
+        println!("💡 若要使用密碼加密，請使用: a -e --pass <密碼> <檔案> 或 a -ep <密碼> <檔案>");
         return;
     }
 
@@ -2228,9 +2262,10 @@ fn main() {
         println!("└────────────────────────────────────────────────────────────┘");
         println!("用法: a [機密筆記內容/支援多行]   #追加寫入並整檔 GPG 鎖定公鑰加密");
         println!("      cat 檔案 | a                 #【管道串流】直接吸納字串流加密追加");
-        println!("      a -p [檔案路徑]              #【檔案加密】加密普通檔案或 .gpg 巢狀多層加密");
-        println!("      a -p [檔案] --pass [密碼]    #【無密鑰防窮舉】S2K 65,011,712 輪密碼對稱加密");
-        println!("      a -p [檔案] -u               #【加密直傳】加密後直接上傳至雲端 Gist");
+        println!("      a -e [檔案路徑]              #【檔案加密】使用預設 GPG 公鑰加密 (本地落盤)");
+        println!("      a -e --pass [密碼] [檔案]    #【對稱加固】S2K 密碼防窮舉加密");
+        println!("      a -ep [密碼] [檔案]          #【快速密碼加密】a -e --pass 簡便寫法");
+        println!("      a -e -s [檔案路徑]           #【加密同步】加密並上傳至雲端 Gist");
         println!("      a -x [檔案路徑]              #【解密還原】還原一層加密封裝 (去 .gpg)");
         println!("      a --new [文件名] [文件內容]     #【創建新文件】在雲端 Gist 創建/寫入新檔案");
         println!("      a --delete [文件名]           #【刪除檔案】指定刪除遠端 Gist 倉庫中的檔案");
