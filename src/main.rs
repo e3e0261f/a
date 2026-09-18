@@ -431,13 +431,6 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
         }
     }
 
-    // 顯示統一審計表格 (快速響應：直接讀取本地配置與目錄，不進行額外網路阻塞)
-    println!("┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                                                     │");
-    println!("├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-    println!("{:<6} {:<36} {:<24} {:<18} {:<50}", "編號", "檔案名稱", "密鑰短碼 (Key ID)", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
-    println!("{:-<6} {:-<36} {:-<24} {:-<18} {:-<50}", "", "", "", "", "");
-
     let mut file_names: Vec<String> = Vec::new();
     if let Ok(entries) = fs::read_dir(&note_dir) {
         for entry in entries.flatten() {
@@ -455,6 +448,33 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
     }
     file_names.sort();
 
+    // 檢查是否所有 gpg 檔案都缺少短碼，若皆無短碼則自動壓縮（隱藏）短碼欄位以優化排版
+    let mut has_any_key = false;
+    for filename in &file_names {
+        if filename.ends_with(".gpg") {
+            if let Some(entry) = ledger.records.iter().find(|r| &r.file_name == filename) {
+                if !entry.key_id.is_empty() && entry.key_id != "-" {
+                    has_any_key = true;
+                }
+            }
+        }
+    }
+
+    // 顯示精美極簡外框與對齊表格
+    if has_any_key {
+        println!("┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
+        println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                                 │");
+        println!("├─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+        println!("{:<5} {:<34} {:<12} {:<14} {:<42}", "編號", "檔案名稱", "短碼", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
+        println!("{:-<5} {:-<34} {:-<12} {:-<14} {:-<42}", "", "", "", "", "");
+    } else {
+        println!("┌─────────────────────────────────────────────────────────────────────────────────────────────┐");
+        println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                 │");
+        println!("├─────────────────────────────────────────────────────────────────────────────────────────────┘");
+        println!("{:<5} {:<36} {:<16} {:<42}", "編號", "檔案名稱", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
+        println!("{:-<5} {:-<36} {:-<16} {:-<42}", "", "", "", "");
+    }
+
     for (idx, filename) in file_names.iter().enumerate() {
         let local_path = note_dir.join(filename);
         let entry_opt = ledger.records.iter().find(|r| &r.file_name == filename);
@@ -466,31 +486,56 @@ fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
             key_id = "-".to_string();
         }
 
+        // 將 16/40 位長金鑰縮短為 8 位短碼 (例如 FA9B204A 或 31C81A9D)
+        let short_key = if key_id.len() > 8 && key_id != "-" {
+            key_id[key_id.len() - 8..].to_string()
+        } else if key_id.is_empty() {
+            "-".to_string()
+        } else {
+            key_id
+        };
+
         let size_str = if local_path.exists() {
             let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
-            format!("{} bytes", size)
+            format!("{} B", size)
         } else {
             "雲端存儲".to_string()
         };
 
         let crack_time = if !is_gpg {
             "明文或純文字 (不適用加密)"
-        } else if !key_id.is_empty() && key_id != "-" {
+        } else if !short_key.is_empty() && short_key != "-" {
             "約 1.2 × 10^32 年 (Quantum-Resistant RSA/ECC)"
         } else {
             "尚未同步短碼 (請執行 a -l --sync)"
         };
 
-        println!(
-            "[{:<3}] {:<36} {:<24} {:<18} {:<50}",
-            idx + 1,
-            filename,
-            key_id,
-            size_str,
-            crack_time
-        );
+        let idx_str = format!("[{}]", idx + 1);
+
+        if has_any_key {
+            println!(
+                "{:<5} {:<34} {:<12} {:<14} {:<42}",
+                idx_str,
+                filename,
+                short_key,
+                size_str,
+                crack_time
+            );
+        } else {
+            println!(
+                "{:<5} {:<36} {:<16} {:<42}",
+                idx_str,
+                filename,
+                size_str,
+                crack_time
+            );
+        }
     }
-    println!("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+    if has_any_key {
+        println!("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+    } else {
+        println!("└─────────────────────────────────────────────────────────────────────────────────────────────┘");
+    }
     println!("💡 快速檢索: 'a -l' | 強制同步更新: 'a -l --sync' | 下載: 'a -d [編號或檔名]' | 刪除: 'a --delete [編號或檔名]'");
 }
 
