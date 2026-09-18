@@ -151,7 +151,51 @@ pub fn get_gist_commit_hash(token: &str, verbose: bool) -> Result<String, String
     }
 }
 
+pub struct GistFileInfo {
+    pub filename: String,
+    pub size: u64,
+}
+
+pub fn list_gist_files_with_details(token: &str, verbose: bool) -> Result<Vec<GistFileInfo>, String> {
+    let client = build_client();
+    let url = GameConfig::get_gist_url()?;
+
+    let response = client.get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if !status.is_success() {
+                return Err(format!("❌ 無法獲取雲端清單，狀態碼: {}", status));
+            }
+
+            let text = res.text().map_err(|e| e.to_string())?;
+            let json_val: Value = serde_json::from_str(&text).map_err(|e| format!("解析 JSON 失敗: {}", e))?;
+
+            if let Some(files_obj) = json_val["files"].as_object() {
+                let mut list = Vec::new();
+                for (name, val) in files_obj {
+                    let size = val["size"].as_u64().unwrap_or(0);
+                    list.push(GistFileInfo {
+                        filename: name.clone(),
+                        size,
+                    });
+                }
+                Ok(list)
+            } else {
+                Err("❌ 解析 Gist 檔案架構失敗".to_string())
+            }
+        },
+        Err(e) => Err(format!("❌ 聯絡雲端失敗: {}", e)),
+    }
+}
+
 pub fn list_gist_files(token: &str, verbose: bool) -> Result<Vec<String>, String> {
+
     let client = build_client();
     let url = GameConfig::get_gist_url()?;
 

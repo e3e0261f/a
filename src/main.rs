@@ -389,125 +389,157 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
         }
     }
 
+    // 獲取遠端 Gist 檔案詳情（含大小）
+    let mut remote_files_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    if let Ok(details) = a::gist::list_gist_files_with_details(&token, verbose) {
+        for d in details {
+            remote_files_map.insert(d.filename, d.size);
+        }
+    }
+
     // 若指定 sync 或 Commit Hash 不同，則連線遠端 Gist 掃描並更新/持久化金鑰審計簿
     if sync {
         println!("📡 [雲端與金鑰鑑識 Sync] 正在連線 GitHub Gist 獲取最新遠端檔案清單...");
-        if let Ok(files) = a::gist::list_gist_files(&token, verbose) {
-            // 更新 commit hash cache
-            if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, false) {
-                unified_cfg.cached_commit_hash = Some(remote_commit);
-                let _ = GameConfig::write_unified_config(&unified_cfg);
+        // 更新 commit hash cache
+        if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, false) {
+            unified_cfg.cached_commit_hash = Some(remote_commit);
+            let _ = GameConfig::write_unified_config(&unified_cfg);
+        }
+
+        for (filename, &remote_size) in &remote_files_map {
+            let is_gpg = filename.ends_with(".gpg");
+            let local_path = note_dir.join(filename);
+            
+            // 檢查本地 ledger 是否已經有完整且有效的短碼資訊
+            let existing_record = ledger.records.iter().find(|r| &r.file_name == filename);
+            let has_valid_key = if let Some(rec) = existing_record {
+                if is_gpg {
+                    !rec.key_id.is_empty() && rec.key_id != "-" && !rec.key_id.contains("未知")
+                } else {
+                    true // 明文檔案本就完整
+                }
+            } else {
+                false
+            };
+
+            // 如果本地信息已經完整（已有短碼），則跳過遠端檢查或下載，直接保留本地資訊
+            if has_valid_key {
+                if verbose {
+                    println!("⚡ [略過已同步] 檔案 {} 於本地已有完整短碼資訊，略過重複檢索。", filename);
+                }
+                continue;
             }
 
-            for filename in files {
-                let is_gpg = filename.ends_with(".gpg");
-                let local_path = note_dir.join(&filename);
-                
-                // 檢查本地 ledger 是否已經有完整且有效的短碼資訊
-                let existing_record = ledger.records.iter().find(|r| r.file_name == filename);
-                let has_valid_key = if let Some(rec) = existing_record {
-                    if is_gpg {
-                        !rec.key_id.is_empty() && rec.key_id != "-" && !rec.key_id.contains("未知")
-                    } else {
-                        true // 明文檔案本就完整
+            println!("🔍 [同步鑑識] 正在識別新檔案或補充短碼: {}...", filename);
+            let mut key_id = String::new();
+            let mut cipher_mode = "GPG_ENCRYPTED".to_string();
+
+            if !is_gpg {
+                key_id = "-".to_string();
+                cipher_mode = "PLAINTEXT".to_string();
+            } else {
+                if local_path.exists() {
+                    let extracted = a::ledger::extract_key_id_from_gpg_file(&local_path);
+                    if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
+                        key_id = extracted;
                     }
                 } else {
-                    false
-                };
-
-                // 如果本地信息已經完整（已有短碼），則跳過遠端檢查或下載，直接保留本地資訊
-                if has_valid_key {
-                    if verbose {
-                        println!("⚡ [略過已同步] 檔案 {} 於本地已有完整短碼資訊，略過重複檢索。", filename);
-                    }
-                    continue;
-                }
-
-                println!("🔍 [同步鑑識] 正在識別新檔案或補充短碼: {}...", filename);
-                let mut key_id = String::new();
-                let mut cipher_mode = "GPG_ENCRYPTED".to_string();
-
-                if !is_gpg {
-                    key_id = "-".to_string();
-                    cipher_mode = "PLAINTEXT".to_string();
-                } else {
-                    if local_path.exists() {
-                        let extracted = a::ledger::extract_key_id_from_gpg_file(&local_path);
-                        if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
-                            key_id = extracted;
-                        }
-                    } else {
-                        // 實在萬不得已，自雲端下載臨時快取以識別金鑰短碼
-                        if let Ok(content) = a::gist::fetch_from_gist(&filename, &token, false) {
-                            let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
-                            if fs::write(&temp_path, content.as_bytes()).is_ok() {
-                                let extracted = a::ledger::extract_key_id_from_gpg_file(&temp_path);
-                                if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
-                                    key_id = extracted;
-                                }
-                                let _ = fs::remove_file(&temp_path);
+                    // 實在萬不得已，自雲端下載臨時快取以識別金鑰短碼
+                    if let Ok(content) = a::gist::fetch_from_gist(filename, &token, false) {
+                        let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
+                        if fs::write(&temp_path, content.as_bytes()).is_ok() {
+                            let extracted = a::ledger::extract_key_id_from_gpg_file(&temp_path);
+                            if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
+                                key_id = extracted;
                             }
+                            let _ = fs::remove_file(&temp_path);
                         }
                     }
                 }
-
-                let size = if local_path.exists() {
-                    fs::metadata(&local_path).map(|m| m.len() as usize).unwrap_or(0)
-                } else {
-                    0
-                };
-
-                let _ = a::ledger::record_ledger_entry(
-                    &filename,
-                    &local_path.to_string_lossy(),
-                    &key_id,
-                    &cipher_mode,
-                    0,
-                    1,
-                    &vec![0u8; size],
-                    "Synced via Gist alignment",
-                );
             }
-            ledger = a::ledger::load_ledger(); // 重新載入更新後的持久化 ledger
+
+            let size = if local_path.exists() {
+                fs::metadata(&local_path).map(|m| m.len() as usize).unwrap_or(remote_size as usize)
+            } else {
+                remote_size as usize
+            };
+
+            let _ = a::ledger::record_ledger_entry(
+                filename,
+                &local_path.to_string_lossy(),
+                &key_id,
+                &cipher_mode,
+                0,
+                1,
+                &vec![0u8; size],
+                "Synced via Gist alignment",
+            );
         }
+        ledger = a::ledger::load_ledger(); // 重新載入更新後的持久化 ledger
     }
 
-    // 嚴格對齊 style.txt 風格的清單收集：直接以遠端或已同步的雲端清單為準
-    let mut file_names: Vec<String> = Vec::new();
-    if sync {
-        if let Ok(files) = a::gist::list_gist_files(&token, false) {
-            file_names = files;
-        }
-    }
-    // 如果未強制 sync 且未觸發 commit hash 變動，則從 ledger 中撈取已同步的遠端清單作為畫面清單
-    if file_names.is_empty() {
-        for r in &ledger.records {
-            if !file_names.iter().any(|f| f == &r.file_name) {
-                file_names.push(r.file_name.clone());
-            }
-        }
-    }
-    // 如果 ledger 也是空的，退而求其次才讀取本地目錄
-    if file_names.is_empty() {
-        if let Ok(entries) = fs::read_dir(&note_dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                    if !name.starts_with('.') && !file_names.iter().any(|f| f == name) {
-                        file_names.push(name.to_string());
-                    }
+    // 收集本地目錄檔案
+    let mut local_files: Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&note_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                if !name.starts_with('.') && !local_files.iter().any(|f| f == name) {
+                    local_files.push(name.to_string());
                 }
             }
         }
     }
-    file_names.sort();
 
-    // 依照 style.txt 規範格式輸出表格
+    // 分類：雲端有的檔案 (cloud-backed) 與 僅本地有的檔案 (local-only)
+    let mut cloud_file_names: Vec<String> = Vec::new();
+    let mut local_only_files: Vec<String> = Vec::new();
+
+    let mut remote_keys: Vec<String> = remote_files_map.keys().cloned().collect();
+    remote_keys.sort();
+    for fname in remote_keys {
+        cloud_file_names.push(fname);
+    }
+    for r in &ledger.records {
+        if remote_files_map.get(&r.file_name).is_none() && !cloud_file_names.contains(&r.file_name) {
+            cloud_file_names.push(r.file_name.clone());
+        }
+    }
+    cloud_file_names.sort();
+
+    for lfile in local_files {
+        let in_cloud = cloud_file_names.contains(&lfile);
+        if !in_cloud {
+            if !local_only_files.contains(&lfile) {
+                local_only_files.push(lfile);
+            }
+        }
+    }
+    local_only_files.sort();
+
+    // 格式化大小函式 (超過 9 進位至高一級單位，1位整數 + 1位小數，如 9.9b, 9.9k, 9.9m, 9.9g)
+    let format_size = |bytes: u64| -> String {
+        let b = bytes as f64;
+        if b < 10.0 {
+            format!("{:.1}b", b)
+        } else if b < 10.0 * 1024.0 {
+            format!("{:.1}k", b / 1024.0)
+        } else if b < 10.0 * 1024.0 * 1024.0 {
+            format!("{:.1}m", b / (1024.0 * 1024.0))
+        } else {
+            format!("{:.1}g", b / (1024.0 * 1024.0 * 1024.0))
+        }
+    };
+
+    // 依照 style.txt 規範格式輸出表格 (緊湊排版，消除過大間距)
     println!(" 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)");
-    println!("---- -- ---------------- ---- -------------------------------------------------------------------------------");
-    println!("{:<4} {:<2} {:<16} {:<4} {:<75}", "編號", "加密状态", "短碼", "大小", "檔案名稱");
-    println!("---- -- ---------------- ---- -------------------------------------------------------------------------------");
+    println!("---- --- ---------------- - ---- --------------------------------------------------------------------------");
+    println!("{:<4} {:<3} {:<16} {:<1} {:<4} {:<65}", "編號", "加密", "短碼", "雲", "大小", "檔案名稱");
+    println!("---- --- ---------------- - ---- --------------------------------------------------------------------------");
 
-    for (idx, filename) in file_names.iter().enumerate() {
+    let mut counter = 1;
+
+    // 1. 渲染雲端備份檔案 (有編號)
+    for filename in &cloud_file_names {
         let local_path = note_dir.join(filename);
         let entry_opt = ledger.records.iter().find(|r| &r.file_name == filename);
 
@@ -527,37 +559,59 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
         };
 
         let status_icon = if !is_gpg {
-            "📄 明文"
+            "📄"
         } else if short_key == "未同步" {
-            "⚠️ 待同步"
+            "⚠️"
         } else {
-            "🛡️ GPG/RSA"
+            "🛡️"
         };
 
-        let size_str = if local_path.exists() {
-            let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
-            if size > 1024 * 1024 {
-                format!("{:.1}M", size as f64 / (1024.0 * 1024.0))
-            } else if size > 1024 {
-                format!("{:.1}K", size as f64 / 1024.0)
-            } else {
-                format!("{}B", size)
-            }
+        // 取得檔案大小：優先用本地，若無則用雲端 API 大小
+        let bytes_size = if local_path.exists() {
+            fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
         } else {
-            "雲端".to_string()
+            *remote_files_map.get(filename).unwrap_or(&0)
         };
+        let size_str = format_size(bytes_size);
 
-        let idx_str = format!("[{:02}]", idx + 1);
+        // 雲端備份圖示 (🌐 表示雲端有備份)
+        let cloud_icon = "🌐";
+
+        let idx_str = format!("[{:02}]", counter);
+        counter += 1;
 
         println!(
-            "{:<4} {:<8} {:<16} {:<6} {:<75}",
+            "{:<4} {:<3} {:<16} {:<1} {:<4} {:<65}",
             idx_str,
             status_icon,
             short_key,
+            cloud_icon,
             size_str,
             filename
         );
     }
+
+    // 2. 渲染僅本地存在而雲端沒有的檔案 (編號用 xx 替代，放於最後)
+    for filename in &local_only_files {
+        let local_path = note_dir.join(filename);
+        let is_gpg = filename.ends_with(".gpg");
+        let status_icon = if is_gpg { "🛡️" } else { "📄" };
+        let short_key = "僅本地".to_string();
+        let bytes_size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+        let size_str = format_size(bytes_size);
+        let cloud_icon = "❌"; // 雲端無備份
+
+        println!(
+            "{:<4} {:<3} {:<16} {:<1} {:<4} {:<65}",
+            "[xx]",
+            status_icon,
+            short_key,
+            cloud_icon,
+            size_str,
+            filename
+        );
+    }
+
     println!("─────────────────────────────────────────────────────────────────────────────────────────────────────────────");
     println!("💡 快速檢索: 'a -l' | 強制同步更新: 'a -l --sync' | 下載: 'a -d [編號或檔名]' | 刪除: 'a --delete [編號或檔名]'");
 }
