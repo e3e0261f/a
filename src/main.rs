@@ -530,11 +530,11 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
         }
     };
 
-    // 依照 style.txt 規範格式輸出表格 (緊湊排版，消除過大間距)
+    // 依照 style.txt 規範格式輸出表格 (緊湊排版，嚴格對齊理想樣式)
     println!(" 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)");
-    println!("---- --- ---------------- - ---- --------------------------------------------------------------------------");
-    println!("{:<4} {:<3} {:<16} {:<1} {:<4} {:<65}", "編號", "加密", "短碼", "雲", "大小", "檔案名稱");
-    println!("---- --- ---------------- - ---- --------------------------------------------------------------------------");
+    println!("---- -------------- ---------------- ---- ---- ------------------------------------------------------------------");
+    println!("{:<4} {:<14} {:<16} {:<4} {:<4} {:<65}", "編號", "加密", "短碼", "雲", "大小", "檔案名稱");
+    println!("---- -------------- ---------------- ---- ---- ------------------------------------------------------------------");
 
     let mut counter = 1;
 
@@ -558,12 +558,12 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
             key_id
         };
 
-        let status_icon = if !is_gpg {
-            "📄"
+        let status_str = if !is_gpg {
+            "📄 明文"
         } else if short_key == "未同步" {
-            "⚠️"
+            "⚠️ 待同步"
         } else {
-            "🛡️"
+            "🛡️ GPG/RSA"
         };
 
         // 取得檔案大小：優先用本地，若無則用雲端 API 大小
@@ -581,9 +581,9 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
         counter += 1;
 
         println!(
-            "{:<4} {:<3} {:<16} {:<1} {:<4} {:<65}",
+            "{:<4} {:<14} {:<16} {:<4} {:<4} {:<65}",
             idx_str,
-            status_icon,
+            status_str,
             short_key,
             cloud_icon,
             size_str,
@@ -595,16 +595,16 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
     for filename in &local_only_files {
         let local_path = note_dir.join(filename);
         let is_gpg = filename.ends_with(".gpg");
-        let status_icon = if is_gpg { "🛡️" } else { "📄" };
+        let status_str = if is_gpg { "🛡️ GPG/RSA" } else { "📄 明文" };
         let short_key = "僅本地".to_string();
         let bytes_size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
         let size_str = format_size(bytes_size);
         let cloud_icon = "❌"; // 雲端無備份
 
         println!(
-            "{:<4} {:<3} {:<16} {:<1} {:<4} {:<65}",
+            "{:<4} {:<14} {:<16} {:<4} {:<4} {:<65}",
             "[xx]",
-            status_icon,
+            status_str,
             short_key,
             cloud_icon,
             size_str,
