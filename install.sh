@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+echo "📡 [Git Sync] 正在執行 git pull 拉取最新專案程式碼..."
+git pull
+if [ $? -ne 0 ]; then
+    echo "⚠️ [提示] git pull 執行失敗或非 git 倉庫，將繼續使用當前本地程式碼進行編譯..."
+fi
+
 echo "🚀 正在启动 Rust 零成本抽象极致编译..."
 cargo build --release
 
