@@ -5,29 +5,66 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use crate::GameConfig;
+use crate::encrypt::{encrypt_with_gpg, decrypt_with_gpg};
 
 type HmacSha1 = Hmac<Sha1>;
 
 pub fn get_totp_storage_path() -> PathBuf {
+    GameConfig::get_note_dir().join("totp_secrets.json.gpg")
+}
+
+pub fn get_legacy_totp_storage_path() -> PathBuf {
     GameConfig::get_app_config_dir().join("totp_secrets.json")
 }
 
 pub fn load_totp_secrets() -> HashMap<String, String> {
     let path = get_totp_storage_path();
+    let legacy_path = get_legacy_totp_storage_path();
+
+    // 1. Try loading encrypted .gpg file from note_dir
     if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(ciphertext) = fs::read_to_string(&path) {
+            if let Ok(json_str) = decrypt_with_gpg(&ciphertext) {
+                if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&json_str) {
+                    return map;
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to legacy unencrypted file if exists, and auto-encrypt it
+    if legacy_path.exists() {
+        if let Ok(content) = fs::read_to_string(&legacy_path) {
             if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                let _ = save_totp_secrets(&map);
+                let _ = fs::remove_file(&legacy_path);
                 return map;
             }
         }
     }
+
     HashMap::new()
 }
 
-pub fn save_totp_secrets(secrets: &HashMap<String, String>) -> std::io::Result<()> {
+pub fn save_totp_secrets(secrets: &HashMap<String, String>) -> Result<(), String> {
     let path = get_totp_storage_path();
-    let content = serde_json::to_string_pretty(secrets)?;
-    fs::write(&path, content)
+    let json_str = serde_json::to_string_pretty(secrets)
+        .map_err(|e| format!("JSON 序列化失敗: {}", e))?;
+
+    let gpg_user_id = GameConfig::get_gpg_user_id()
+        .unwrap_or_else(|_| "".to_string());
+
+    let encrypted_content = if !gpg_user_id.is_empty() {
+        encrypt_with_gpg(json_str.as_bytes(), &gpg_user_id)?
+    } else {
+        // Fallback if no GPG key configured yet
+        json_str
+    };
+
+    fs::write(&path, encrypted_content)
+        .map_err(|e| format!("寫入加密 TOTP 檔案失敗: {}", e))?;
+
+    Ok(())
 }
 
 pub fn generate_totp(secret_base32: &str) -> Result<(String, u64), String> {
@@ -74,19 +111,37 @@ pub fn handle_totp_command(args: &[String], _verbose: bool) {
     while i < args.len() {
         let arg = &args[i];
         if arg == "--add" || arg == "-a" {
-            if i + 1 >= args.len() {
-                println!("❌ 錯誤：請指定標籤名稱 (label)。範例: a -t --add google --code \"...\"");
-                return;
-            }
-            let label = args[i + 1].clone();
+            let mut label = String::new();
             let mut secret = String::new();
 
-            if i + 2 < args.len() && (args[i + 2] == "--code" || args[i + 2] == "-c") {
-                if i + 3 < args.len() {
-                    secret = args[i + 3].clone();
+            let mut j = i + 1;
+            while j < args.len() {
+                let sub = &args[j];
+                if sub == "--name" || sub == "-n" {
+                    if j + 1 < args.len() {
+                        label = args[j + 1].clone();
+                        j += 2;
+                        continue;
+                    }
+                } else if sub == "--code" || sub == "-c" {
+                    if j + 1 < args.len() {
+                        secret = args[j + 1].clone();
+                        j += 2;
+                        continue;
+                    }
+                } else if !sub.starts_with('-') {
+                    if label.is_empty() {
+                        label = sub.clone();
+                    } else if secret.is_empty() {
+                        secret = sub.clone();
+                    }
                 }
-            } else if i + 2 < args.len() {
-                secret = args[i + 2].clone();
+                j += 1;
+            }
+
+            if label.is_empty() {
+                println!("❌ 錯誤：請指定標籤名稱 (label)。範例: a -t --add google --code \"...\" 或 a -t --add --name google --code \"...\"");
+                return;
             }
 
             if secret.is_empty() {
@@ -97,10 +152,13 @@ pub fn handle_totp_command(args: &[String], _verbose: bool) {
             match generate_totp(&secret) {
                 Ok(_) => {
                     secrets.insert(label.clone(), secret);
-                    if let Err(e) = save_totp_secrets(&secrets) {
-                        println!("❌ 儲存 TOTP 密鑰失敗: {}", e);
-                    } else {
-                        println!("✨ 成功新增/更新 TOTP 標籤: [{}]", label);
+                    match save_totp_secrets(&secrets) {
+                        Ok(_) => {
+                            println!("✨ 成功新增/更新 TOTP 標籤: [{}] (已加密儲存於本地筆記目錄，可透過 a -s 同步至雲端)", label);
+                        }
+                        Err(e) => {
+                            println!("❌ 儲存 TOTP 密鑰失敗: {}", e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -110,63 +168,84 @@ pub fn handle_totp_command(args: &[String], _verbose: bool) {
             return;
         } else if arg == "--delete" || arg == "--rm" || arg == "-d" {
             if i + 1 >= args.len() {
-                println!("❌ 錯誤：請指定欲刪除的標籤名稱。範例: a -t --delete google");
+                println!("❌ 錯誤：請指定欲刪除的標籤名稱或編號。範例: a -t --delete google");
                 return;
             }
-            let label = &args[i + 1];
-            if secrets.remove(label).is_some() {
-                if let Err(e) = save_totp_secrets(&secrets) {
-                    println!("❌ 儲存失敗: {}", e);
-                } else {
-                    println!("🗑️ 已成功刪除 TOTP 標籤: [{}]", label);
+            let target = &args[i + 1];
+            let mut keys: Vec<String> = secrets.keys().cloned().collect();
+            keys.sort();
+
+            let mut label_to_remove = target.clone();
+            if let Ok(idx) = target.parse::<usize>() {
+                if idx > 0 && idx <= keys.len() {
+                    label_to_remove = keys[idx - 1].clone();
+                }
+            }
+
+            if secrets.remove(&label_to_remove).is_some() {
+                match save_totp_secrets(&secrets) {
+                    Ok(_) => {
+                        println!("🗑️ 已成功刪除 TOTP 標籤: [{}] (已同步更新加密存盤)", label_to_remove);
+                    }
+                    Err(e) => {
+                        println!("❌ 儲存失敗: {}", e);
+                    }
                 }
             } else {
-                println!("⚠️ 找不到標籤 [{}]", label);
+                println!("⚠️ 找不到標籤或編號 [{}]", target);
             }
             return;
         } else if arg == "--list" || arg == "-l" {
-            print_all_totps(&secrets);
+            print_totp_index_list(&secrets);
             return;
         } else if !arg.starts_with('-') {
-            if let Some(secret) = secrets.get(arg) {
+            // Lookup by index or label
+            let mut keys: Vec<String> = secrets.keys().cloned().collect();
+            keys.sort();
+
+            let mut matched_label = arg.clone();
+            if let Ok(idx) = arg.parse::<usize>() {
+                if idx > 0 && idx <= keys.len() {
+                    matched_label = keys[idx - 1].clone();
+                }
+            }
+
+            if let Some(secret) = secrets.get(&matched_label) {
                 match generate_totp(secret) {
                     Ok((code, remaining)) => {
-                        println!("🔑 [{}] 驗證碼: {} (有效剩餘: {}s)", arg, code, remaining);
+                        println!("🔑 [{}] 驗證碼: {} (有效剩餘: {}s)", matched_label, code, remaining);
                     }
                     Err(e) => {
-                        println!("❌ 計算 [{}] 驗證碼失敗: {}", arg, e);
+                        println!("❌ 計算 [{}] 驗證碼失敗: {}", matched_label, e);
                     }
                 }
             } else {
-                println!("❌ 找不到標籤 [{}]。請先使用 a -t --add {} --code \"...\" 新增。", arg, arg);
+                println!("❌ 找不到標籤或編號 [{}]。請先使用 a -t --list 查看可用項目。", arg);
             }
             return;
         }
         i += 1;
     }
 
-    print_all_totps(&secrets);
+    print_totp_index_list(&secrets);
 }
 
-fn print_all_totps(secrets: &HashMap<String, String>) {
+fn print_totp_index_list(secrets: &HashMap<String, String>) {
     if secrets.is_empty() {
         println!("📂 目前尚未儲存任何 TOTP 驗證密鑰。");
         println!("💡 新增範例: a -t --add google --code \"oufb d3w6 krma 7tcu dsaz cdis emey df5b\"");
         return;
     }
 
-    println!("\n🛡️ Cyber-NOte TOTP 雙重認證驗證碼列表:");
+    let mut keys: Vec<String> = secrets.keys().cloned().collect();
+    keys.sort();
+
+    println!("\n🛡️ Cyber-NOte TOTP 雙重認證項目列表:");
     println!("------------------------------------------------------------");
-    for (label, secret) in secrets {
-        match generate_totp(secret) {
-            Ok((code, remaining)) => {
-                println!("  🔑 {:<16} : {}  (剩餘 {:2}s)", label, code, remaining);
-            }
-            Err(_) => {
-                println!("  🔑 {:<16} : [金鑰解析錯誤]", label);
-            }
-        }
+    for (idx, label) in keys.iter().enumerate() {
+        println!("  [{}] {}", idx + 1, label);
     }
     println!("------------------------------------------------------------");
-    println!("💡 取得單一驗證碼: 'a -t [標籤名]' | 新增: 'a -t --add [標籤] --code [密鑰]'");
+    println!("💡 取得驗證碼: 'a -t [編號或標籤]' (例: a -t 1 或 a -t google)");
+    println!("💡 新增密鑰:   'a -t --add [標籤] --code [密鑰]' 或 'a -t --add --name [標籤] --code [密鑰]'");
 }
