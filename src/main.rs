@@ -358,66 +358,131 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
     }
 }
 
-// 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k)
-fn handle_list_and_ledger_command(verbose: bool) {
-    let token = match get_github_token(verbose) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("❌ 錯誤：無法取得 GitHub Token: {}", e);
-            a::ledger::print_ledger_table();
-            return;
-        }
-    };
+// 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k / a -l --sync)
+fn handle_list_and_ledger_command(sync: bool, verbose: bool) {
+    let note_dir = GameConfig::get_note_dir();
+    let mut ledger = a::ledger::load_ledger();
 
-    println!("📡 [雲端與金鑰鑑識] 正在掃描 GitHub Gist 倉庫檔案清單並進行 GPG 封包審計...");
-    let files = match list_gist_files(&token, verbose) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("⚠️ 獲取清單失敗: {}，改為顯示本地審計簿。", e);
-            a::ledger::print_ledger_table();
-            return;
-        }
-    };
+    // 若指定 sync (a -l --sync 或 a --sync)，則連線遠端 Gist 掃描並更新/持久化金鑰審計簿
+    if sync {
+        let token = match get_github_token(verbose) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("❌ 錯誤：無法取得 GitHub Token: {}", e);
+                a::ledger::print_ledger_table();
+                return;
+            }
+        };
 
+        println!("📡 [雲端與金鑰鑑識 Sync] 正在掃描 GitHub Gist 倉庫檔案清單並更新金鑰審計簿...");
+        if let Ok(files) = list_gist_files(&token, verbose) {
+            for filename in files {
+                let is_gpg = filename.ends_with(".gpg");
+                let local_path = note_dir.join(&filename);
+                let mut key_id = String::new();
+                let mut cipher_mode = "GPG_ENCRYPTED".to_string();
+
+                if !is_gpg {
+                    key_id = "-".to_string();
+                    cipher_mode = "PLAINTEXT".to_string();
+                } else {
+                    // 優先從本地持久化 ledger 中讀取已知的 key_id
+                    if let Some(existing) = ledger.records.iter().find(|r| r.file_name == filename && !r.key_id.is_empty() && r.key_id != "-") {
+                        key_id = existing.key_id.clone();
+                        cipher_mode = existing.cipher_mode.clone();
+                    } else if local_path.exists() {
+                        let extracted = a::ledger::extract_key_id_from_gpg_file(&local_path);
+                        if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
+                            key_id = extracted;
+                        }
+                    } else {
+                        // 實在萬不得已，自雲端下載臨時快取以識別金鑰短碼
+                        if let Ok(content) = fetch_from_gist(&filename, &token, false) {
+                            let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
+                            if fs::write(&temp_path, content.as_bytes()).is_ok() {
+                                let extracted = a::ledger::extract_key_id_from_gpg_file(&temp_path);
+                                if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
+                                    key_id = extracted;
+                                }
+                                let _ = fs::remove_file(&temp_path);
+                            }
+                        }
+                    }
+                }
+
+                let size = if local_path.exists() {
+                    fs::metadata(&local_path).map(|m| m.len() as usize).unwrap_or(0)
+                } else {
+                    0
+                };
+
+                let _ = a::ledger::record_ledger_entry(
+                    &filename,
+                    &local_path.to_string_lossy(),
+                    &key_id,
+                    &cipher_mode,
+                    0,
+                    1,
+                    &vec![0u8; size],
+                    "Synced via a -l --sync",
+                );
+            }
+            ledger = a::ledger::load_ledger(); // 重新載入更新後的持久化 ledger
+        }
+    }
+
+    // 顯示統一審計表格 (快速響應：直接讀取本地配置與目錄，不進行額外網路阻塞)
     println!("┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
     println!("│ 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)                                                     │");
     println!("├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-    println!("{:<6} {:<32} {:<24} {:<18} {:<50}", "編號", "檔案名稱", "密鑰短碼 (Key ID)", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
-    println!("{:-<6} {:-<32} {:-<24} {:-<18} {:-<50}", "", "", "", "", "");
+    println!("{:<6} {:<36} {:<24} {:<18} {:<50}", "編號", "檔案名稱", "密鑰短碼 (Key ID)", "檔案狀態", "暴力破解推算時間 (目前最高級別)");
+    println!("{:-<6} {:-<36} {:-<24} {:-<18} {:-<50}", "", "", "", "", "");
 
-    let note_dir = GameConfig::get_note_dir();
-
-    for (idx, filename) in files.iter().enumerate() {
-        let local_path = note_dir.join(filename);
-        let mut key_id = "未知 / 未下載".to_string();
-        let mut size_str = "雲端存儲".to_string();
-        let mut crack_time = "約 1.2 × 10^32 年 (Quantum-Resistant RSA/ECC)";
-
-        if local_path.exists() {
-            let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
-            size_str = format!("{} bytes", size);
-            key_id = a::ledger::extract_key_id_from_gpg_file(&local_path);
-        } else {
-            if let Ok(content) = fetch_from_gist(filename, &token, false) {
-                let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
-                if fs::write(&temp_path, content.as_bytes()).is_ok() {
-                    key_id = a::ledger::extract_key_id_from_gpg_file(&temp_path);
-                    let size = content.len();
-                    size_str = format!("{} bytes", size);
-                    let _ = fs::remove_file(&temp_path);
+    let mut file_names: Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&note_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                if !name.starts_with('.') && !file_names.iter().any(|f| f == name) {
+                    file_names.push(name.to_string());
                 }
             }
         }
+    }
+    for r in &ledger.records {
+        if !file_names.iter().any(|f| f == &r.file_name) {
+            file_names.push(r.file_name.clone());
+        }
+    }
+    file_names.sort();
 
-        if key_id.contains("對稱") || key_id.contains("S2K") {
-            crack_time = "約 4.2 × 10^12 年 (S2K 65M 輪加固對稱防窮舉)";
-        } else if filename.ends_with(".asc") || filename.ends_with(".txt") || filename.ends_with(".note") {
-            crack_time = "明文或純文字 (不適用加密)";
-            key_id = "PLAINTEXT / ASC".to_string();
+    for (idx, filename) in file_names.iter().enumerate() {
+        let local_path = note_dir.join(filename);
+        let entry_opt = ledger.records.iter().find(|r| &r.file_name == filename);
+
+        let mut key_id = entry_opt.map(|e| e.key_id.clone()).unwrap_or_default();
+        let is_gpg = filename.ends_with(".gpg");
+
+        if !is_gpg && (key_id.is_empty() || key_id == "-") {
+            key_id = "-".to_string();
         }
 
+        let size_str = if local_path.exists() {
+            let size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+            format!("{} bytes", size)
+        } else {
+            "雲端存儲".to_string()
+        };
+
+        let crack_time = if !is_gpg {
+            "明文或純文字 (不適用加密)"
+        } else if !key_id.is_empty() && key_id != "-" {
+            "約 1.2 × 10^32 年 (Quantum-Resistant RSA/ECC)"
+        } else {
+            "尚未同步短碼 (請執行 a -l --sync)"
+        };
+
         println!(
-            "[{:<3}] {:<32} {:<24} {:<18} {:<50}",
+            "[{:<3}] {:<36} {:<24} {:<18} {:<50}",
             idx + 1,
             filename,
             key_id,
@@ -426,7 +491,7 @@ fn handle_list_and_ledger_command(verbose: bool) {
         );
     }
     println!("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-    println!("💡 下載密文: 'a -d [編號或檔名]' | 下載並解密: 'a -d [編號或檔名] -x' | 刪除遠端: 'a --delete [編號或檔名]'");
+    println!("💡 快速檢索: 'a -l' | 強制同步更新: 'a -l --sync' | 下載: 'a -d [編號或檔名]' | 刪除: 'a --delete [編號或檔名]'");
 }
 
 // 🛡️ 遠端檔案在位套殼加密控制邏輯 (Remote In-Place Encapsulate & Clean Original)
@@ -1607,7 +1672,8 @@ fn main() {
             || args[1] == "--keys"
             || args[1] == "--key-ledger")
     {
-        handle_list_and_ledger_command(verbose);
+        let sync = args.iter().any(|a| a == "--sync" || a == "-s" || a == "--update");
+        handle_list_and_ledger_command(sync, verbose);
         return;
     }
 
@@ -1884,7 +1950,8 @@ fn main() {
 
     // ✨ 8. 列出雲端檔案與審計 (-l / --list)
     if args.len() > 1 && (args[1] == "-l" || args[1] == "--list") {
-        handle_list_and_ledger_command(verbose);
+        let sync = args.iter().any(|a| a == "--sync" || a == "-s" || a == "--update");
+        handle_list_and_ledger_command(sync, verbose);
         return;
     }
 
