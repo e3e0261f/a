@@ -65,6 +65,46 @@ pub fn load_ledger() -> KeyLedger {
     KeyLedger::default()
 }
 
+pub fn record_ledger_entry(
+    file_name: &str,
+    target_path: &str,
+    key_id: &str,
+    cipher_mode: &str,
+    iterations: u64,
+    layer: u32,
+    data: &[u8],
+    notes: &str,
+) -> Result<(), String> {
+    let mut ledger = load_ledger();
+    let now = Local::now();
+    let id = format!("REC-{}-{}", now.format("%Y%m%d%H%M%S"), now.timestamp_subsec_millis());
+    let sha256 = compute_sha256(data);
+
+    let entry = KeyLedgerEntry {
+        id,
+        file_name: file_name.to_string(),
+        target_path: target_path.to_string(),
+        key_id: key_id.to_string(),
+        cipher_mode: cipher_mode.to_string(),
+        iterations,
+        layer,
+        timestamp: now.to_rfc3339(),
+        file_size_bytes: data.len(),
+        sha256,
+        notes: notes.to_string(),
+    };
+
+    ledger.records.retain(|r| !(r.file_name == file_name && r.layer == layer));
+    ledger.records.push(entry);
+    ledger.updated_at = now.to_rfc3339();
+
+    let path = get_ledger_path();
+    let json = serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?;
+    fs::write(&path, &json).map_err(|e| format!("無法寫入金鑰歸檔簿: {}", e))?;
+
+    Ok(())
+}
+
 pub fn extract_key_id_from_gpg_file(path: &std::path::Path) -> String {
     if let Ok(output) = std::process::Command::new("gpg")
         .arg("--list-packets")
