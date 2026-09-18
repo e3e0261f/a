@@ -4,7 +4,7 @@ use sha1::Sha1;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use crate::lib::GameConfig;
+use crate::GameConfig;
 
 type HmacSha1 = Hmac<Sha1>;
 
