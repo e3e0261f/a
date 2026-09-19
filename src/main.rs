@@ -3,7 +3,7 @@
 // 核心架構：嚴格鎖定 GPG 金鑰隔離體系（嚴禁 SSH 金鑰混用）、多層巢狀加密封裝、高迭代 S2K 防窮舉加固與金鑰歸檔簿審計。
 
 use chrono::Local;
-use comfy_table::{presets::NOTHING, Attribute, Cell, Color, Table};
+use comfy_table::{presets::NOTHING, Cell, Color, Table};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
@@ -549,7 +549,7 @@ fn handle_show_command(args: &[String], verbose: bool) {
 
     let mut table = Table::new();
     table.load_preset(NOTHING);
-    table.add_row(vec![Cell::new("檔案名稱 :").fg(Color::Cyan), Cell::new(filename)]);
+    table.add_row(vec![Cell::new("檔案名稱 :").fg(Color::Cyan), Cell::new(&filename)]);
     table.add_row(vec![Cell::new("檔案狀態 :").fg(Color::Cyan), Cell::new(status_str)]);
     table.add_row(vec![Cell::new("雲端備份 :").fg(Color::Cyan), Cell::new(cloud_status)]);
     table.add_row(vec![Cell::new("金鑰短碼 :").fg(Color::Cyan), Cell::new(key_id)]);
@@ -705,29 +705,29 @@ fn handle_list_and_ledger_command(verbose: bool) {
         }
     }
 
-    let mut cloud_file_names: Vec<String> = Vec::new();
     let mut local_only_files: Vec<String> = Vec::new();
 
-    if is_online {
+    let cloud_file_names: Vec<String> = if is_online {
         // 🌟 線上模式：遠端清單 100% 以 GitHub Gist 實際取得的檔案為準，絕不盲目攙入歷史殘留檔案！
         let mut remote_keys: Vec<String> = remote_files_map.keys().cloned().collect();
         remote_keys.sort();
-        cloud_file_names = remote_keys;
 
         // 覆蓋更新本地持久化快取
-        unified_cfg.cached_remote_files = Some(cloud_file_names.clone());
+        unified_cfg.cached_remote_files = Some(remote_keys.clone());
         let _ = GameConfig::write_unified_config(&unified_cfg);
+        remote_keys
     } else {
         // 離線/斷網模式：自本地持久化快取優雅載入
         println!("⚠️ [離線檢索] 無法連線遠端 GitHub Gist，正在載入本地持久化快取清單...");
-        if let Some(ref cached) = unified_cfg.cached_remote_files {
-            cloud_file_names = cached.clone();
+        let mut cached_list = if let Some(ref cached) = unified_cfg.cached_remote_files {
+            cached.clone()
         } else {
-            cloud_file_names = ledger.records.iter().map(|r| r.file_name.clone()).collect();
-        }
-        cloud_file_names.sort();
-        cloud_file_names.dedup();
-    }
+            ledger.records.iter().map(|r| r.file_name.clone()).collect()
+        };
+        cached_list.sort();
+        cached_list.dedup();
+        cached_list
+    };
 
     for lfile in local_files {
         let in_cloud = cloud_file_names.contains(&lfile);
@@ -2643,11 +2643,11 @@ fn main() {
         if flags_set.contains(&'s') {
             if flags_set.contains(&'u') {
                 println!("🚀 [年度機密檔案] 以明文模式推送至遠端 Gist 倉庫...");
-                let mut sync_args = vec!["a".to_string(), "-s".to_string(), "-u".to_string()];
+                let sync_args = vec!["a".to_string(), "-s".to_string(), "-u".to_string()];
                 handle_sync_command(&sync_args, verbose);
             } else {
                 println!("🚀 [年度機密檔案] 以加密模式推送至遠端 Gist 倉庫...");
-                let mut sync_args = vec!["a".to_string(), "-s".to_string()];
+                let sync_args = vec!["a".to_string(), "-s".to_string()];
                 handle_sync_command(&sync_args, verbose);
             }
             return;
