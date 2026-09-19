@@ -2028,7 +2028,11 @@ fn handle_sync_command(args: &[String], verbose: bool) {
 // ☁️ 雲端下載與自動解密對齊 (a -d / a --download / a -d --all / a -bd / a -db)
 fn handle_download_command(args: &[String], verbose: bool) {
     let timer = Instant::now();
-    let should_decrypt = args.iter().any(|arg| arg == "-x" || arg == "--decrypt");
+    let should_decrypt = args.iter().any(|arg| {
+        arg == "-x"
+            || arg == "--decrypt"
+            || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('x'))
+    });
     let is_all = args.iter().skip(1).any(|arg| {
         arg == "--all"
             || arg == "-a"
@@ -2734,37 +2738,7 @@ fn main() {
         }
     }
 
-    // 🌟 9. 對稱 S2K 密碼防窮舉加密：a -p [密碼] [檔案]
-    if flags_set.contains(&'p') {
-        handle_encrypt_command(&args, verbose);
-        return;
-    }
-
-    // 🌟 10. 強制加密模式：a -e [文件名]
-    if flags_set.contains(&'e') {
-        handle_encrypt_command(&args, verbose);
-        return;
-    }
-
-    // 🌟 11. 下載：a -d [文件名] (支援 -o 與 -x)
-    if flags_set.contains(&'d') {
-        handle_download_command(&args, verbose);
-        return;
-    }
-
-    // 🌟 12. 解密一層加密封裝：a -x [文件名]
-    if flags_set.contains(&'x') {
-        handle_decrypt_command(&args);
-        return;
-    }
-
-    // 🌟 13. 金鑰審計清單：a -k
-    if flags_set.contains(&'k') {
-        a::ledger::print_ledger_table();
-        return;
-    }
-
-    // 🌟 14. 雲端推送與檢索清單：a -s / a -l / a -sl
+    // 🌟 9. 雲端推送與檢索清單：a -s / a -l / a -sl / a -se / a -es
     let has_s = flags_set.contains(&'s');
     let has_l = flags_set.contains(&'l');
     if has_s && has_l {
@@ -2779,6 +2753,36 @@ fn main() {
     }
     if has_l {
         handle_list_and_ledger_command(verbose);
+        return;
+    }
+
+    // 🌟 10. 下載：a -d [文件名] (支援 -o 與 -x)
+    if flags_set.contains(&'d') {
+        handle_download_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 11. 金鑰審計清單：a -k
+    if flags_set.contains(&'k') {
+        a::ledger::print_ledger_table();
+        return;
+    }
+
+    // 🌟 12. 對稱 S2K 密碼防窮舉加密：a -p [密碼] [檔案]
+    if flags_set.contains(&'p') {
+        handle_encrypt_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 13. 強制加密模式（本地）：a -e [文件名]
+    if flags_set.contains(&'e') {
+        handle_encrypt_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 14. 解密一層加密封裝（本地）：a -x [文件名]
+    if flags_set.contains(&'x') {
+        handle_decrypt_command(&args);
         return;
     }
 

@@ -377,8 +377,8 @@ export async function executeCommand(
     }
   }
 
-  // 🌟 10. 強制加密：a -e [文件名]
-  if (flagsSet.has('e') && !flagsSet.has('a')) {
+  // 🌟 10. 強制加密（本地）：a -e [文件名]
+  if (flagsSet.has('e') && !flagsSet.has('a') && !flagsSet.has('s')) {
     const targetFile = positionalArgs[0];
     if (!targetFile) {
       addLine('❌ 錯誤：請指定欲加密的檔案名稱。範例: a -e note.txt', 'red');
