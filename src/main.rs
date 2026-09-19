@@ -294,27 +294,62 @@ fn print_web_dependencies_guide(missing_tsx: bool, missing_express: bool) {
 
 // 🚀 創建新檔案：a --new [文件名] [文件內容] (若無 -s 則在本地創建，有 -s 才上傳遠端)
 fn handle_new_repo_command(args: &[String], verbose: bool) {
-    let non_flag_args: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).collect();
-    if non_flag_args.is_empty() {
-        println!("❌ 錯誤：請指定檔案名稱。範例: a --new hello.txt \"Hello world\"");
+    let mut out_dir_opt: Option<String> = None;
+    let mut positional_args = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-o" || arg == "--out" || arg == "--output" {
+            if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                out_dir_opt = Some(args[i + 1].clone());
+                i += 2;
+                continue;
+            } else {
+                out_dir_opt = Some(".".to_string());
+                i += 1;
+                continue;
+            }
+        }
+        if arg.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        positional_args.push(arg);
+        i += 1;
+    }
+
+    if positional_args.is_empty() {
+        println!("❌ 錯誤：請指定檔案名稱。範例: a --new 123 321");
         return;
     }
-    let filename = non_flag_args[0];
-    let content = if non_flag_args.len() > 1 {
-        non_flag_args[1..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
+
+    let filename = positional_args[0];
+    let content = if positional_args.len() > 1 {
+        positional_args[1..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
     } else {
         "\n".to_string()
     };
 
     let sync = args.iter().any(|a| a == "-s" || a == "--sync" || a == "-u" || a == "--upload");
-    let note_dir = GameConfig::get_note_dir();
+
+    let target_dir = if let Some(ref dir_str) = out_dir_opt {
+        PathBuf::from(dir_str)
+    } else {
+        GameConfig::get_note_dir()
+    };
 
     if !sync {
-        let _ = fs::create_dir_all(&note_dir);
-        let file_path = note_dir.join(filename);
+        let _ = fs::create_dir_all(&target_dir);
+        let file_path = target_dir.join(filename);
+
+        if file_path.exists() {
+            println!("❌ 錯誤：檔案已存在 -> {:?}", file_path);
+            return;
+        }
+
         match fs::write(&file_path, content.as_bytes()) {
-            Ok(_) => println!("✨ 成功在本地創建並寫入檔案: {:?}", file_path),
-            Err(e) => println!("❌ 寫入本地檔案失敗: {}", e),
+            Ok(_) => println!("✨ 成功創建檔案: {:?}", file_path),
+            Err(e) => println!("❌ 寫入檔案失敗: {}", e),
         }
     } else {
         let token = match get_github_token(verbose) {
@@ -1555,42 +1590,19 @@ fn handle_encrypt_command(args: &[String], verbose: bool) {
 
     let sha256 = compute_sha256(ciphertext.as_bytes());
 
-    println!("┌────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ 🛡️  Cyber-NOte 檔案加密封裝報告                                             │");
-    println!("├────────────────────────────────────────────────────────────────────────────┤");
-    println!("│ 來源檔案 : {:<64} │", target_file);
-    println!("│ 輸出檔案 : {:<64} │", out_file_path);
-    println!(
-        "│ 封裝層級 : {:<64} │",
-        format!("第 {} 層 (巢狀封裝)", target_layer)
-    );
-    println!(
-        "│ 加密體系 : {:<64} │",
-        if cipher_mode == "GPG_SYMMETRIC_S2K" {
-            "GPG 對稱加密 (AES-256 + SHA-512)"
+    let key_display = if cipher_mode == "GPG_SYMMETRIC_S2K" {
+        "GPG 對稱加密".to_string()
+    } else {
+        let short_id = if key_id_used.len() >= 8 {
+            &key_id_used[key_id_used.len() - 8..]
         } else {
-            "GPG 鎖定公鑰加密 (已隔離 SSH)"
-        }
-    );
-    println!(
-        "│ 防窮舉值 : {:<64} │",
-        if iterations_used > 0 {
-            format!("S2K 模式 3 ({} 輪迭代運算)", iterations_used)
-        } else {
-            "GPG 非對稱公鑰體系 (無字典窮舉風險)".to_string()
-        }
-    );
-    println!(
-        "│ 密文大小 : {:<64} │",
-        format!(
-            "{:.2} KB ({} Bytes)",
-            ciphertext.len() as f64 / 1024.0,
-            ciphertext.len()
-        )
-    );
-    println!("│ 雜湊校驗 : {:<64} │", format!("SHA-256: {}", &sha256[..32]));
-    println!("│ 金鑰審計 : {:<64} │", "已鎖定存檔至金鑰歸檔簿 (Key Ledger)");
-    println!("└────────────────────────────────────────────────────────────────────────────┘");
+            &key_id_used
+        };
+        format!("GPG 公鑰加密 (Key ID: {})", short_id)
+    };
+    println!("{}", key_display);
+    println!("密文大小 : {:.2} KB ({} Bytes)", ciphertext.len() as f64 / 1024.0, ciphertext.len());
+    println!("雜湊校驗 : SHA-256: {}", &sha256[..32]);
 
     // 若指定 -s / --sync / -se 等，同步上傳至 Gist 雲端
     if upload {
