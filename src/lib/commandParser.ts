@@ -3,6 +3,37 @@ import { encryptWithGpg, decryptWithGpg } from './crypto';
 import { readNote, saveNote, loadAllNotes, saveAppConfig, saveAllNotes } from './storage';
 import { listGistFiles, fetchFromGist, syncToGist, deleteFromGist } from './gist';
 
+export const A_INFO_LINES: string[] = [
+  '用法: a [機密筆記內容/支援多行]    # 追加寫入年度机密档案',
+  '      cat 檔案 | a                 # 管道串流',
+  '      a -e [文件名]                # 强制加密模式',
+  '      a -p [密碼] [檔案]           # 對稱 S2K 密碼防窮舉加密',
+  '      a -x [文件名]                # 解密一層加密封裝',
+  '      a -n [文件名] [文件內容]     # 創建新文件 在雲端/本地',
+  '      a -m [文件名] [新文件名]     # 重命名',
+  '      a -f [文件名]                # 删除档案/远端档案',
+  '      a -t [標籤] [密鑰]           # 新增TOTP 註冊驗證密鑰',
+  '\t\t-t                         # 打印所有TOTP标签',
+  '\t\t-t [标签]                  # 列印6为动态码',
+  '      a -k                         # 金鑰審計清單',
+  '      a -a                         # 解密並列印今年度機密文檔',
+  '\t    -aes                       # 加密推送年度机密档案',
+  '\t\t-aus                       # 明文推送年度机密档案',
+  '      a -s [文件名]                # 推送',
+  '      a -u                         # 强制明文模式',
+  '      a -l                         # 檢索雲端 Gist 倉庫全部檔案清單',
+  '      a -d [文件名]                # 下載',
+  '      a -o [目標路徑或./]          # 指定檔名/本地操作',
+  '      a -r1 或 a -r 1              # 刪除年度机密档案【倒數第 1 行】',
+  '      a -r1-100 或 a -r 1-100      # 刪除年度机密档案【倒數 1 至 100 行】',
+  '      a -r [關鍵字]                # 刪除年度机密档案 包含該關鍵字的所有行',
+  '      a -w                         #【網頁管理引擎】啟動 Web 視覺化管理後台',
+  '\t  a -b                         # 操作全部',
+  '\t    -bs                        # 推送本地档案目录全部文件,覆盖远端gits仓库',
+  '\t\t-bd                        # 拉取远端gits全部文件,覆盖本地档案目录',
+  '      a -i [不可参数搭配]          # 系統重新配置 /密钥/gitsID/档案目录/Token',
+];
+
 export async function executeCommand(
   rawInput: string,
   config: AppConfig,
@@ -42,37 +73,19 @@ export async function executeCommand(
     return [{ id: 'clear', text: '__CLEAR__' }];
   }
 
-  if (rootCommand === 'help') {
+  if (rootCommand === 'cat' && (args[0] === 'a.info' || args[0] === '/a.info' || args[0] === './a.info')) {
+    for (const infoLine of A_INFO_LINES) {
+      addLine(infoLine);
+    }
+    return lines;
+  }
+
+  if (rootCommand === 'help' || (rootCommand === 'a' && (args[0] === 'help' || args[0] === '-h' || args[0] === '--help'))) {
     addLine('🛡️ Cyber-NOte 指令說明手冊 (/a.info)', 'white', true);
     addLine('------------------------------------------------------------', 'gray');
-    addLine('  a [內容]                     # 追加寫入並整檔 GPG 鎖定公鑰加密', 'cyan');
-    addLine('  cat 檔案 | a                 #【管道串流】直接吸納字串流加密追加', 'cyan');
-    addLine('  a -e [文件名]                # 強制加密模式', 'green');
-    addLine('  a -p [密碼] [檔案]           # 對稱 S2K 密碼防窮舉加密', 'green');
-    addLine('  a -x [文件名]                # 解密一層加密封裝 (去 .gpg)', 'green');
-    addLine('  a -n [文件名] [文件內容]     # 創建新文件 在雲端/本地', 'purple');
-    addLine('  a -m [文件名] [新文件名]     # 重命名', 'purple');
-    addLine('  a -f [文件名]                # 刪除檔案/遠端檔案', 'purple');
-    addLine('  a -t [標籤] [密鑰]           # 新增 TOTP 註冊驗證密鑰', 'yellow');
-    addLine('    -t                         # 打印所有 TOTP 標籤', 'yellow');
-    addLine('    -t [標籤]                  # 列印 6 位動態碼', 'yellow');
-    addLine('  a -k                         # 金鑰審計清單', 'cyan');
-    addLine('  a -a                         # 解密並列印今年度機密文檔', 'green');
-    addLine('    -aes                       # 加密推送年度機密檔案', 'green');
-    addLine('    -aus                       # 明文推送年度機密檔案', 'yellow');
-    addLine('  a -s [文件名]                # 推送', 'green');
-    addLine('  a -u                         # 強制明文模式', 'yellow');
-    addLine('  a -l                         # 檢索雲端 Gist 倉庫全部檔案清單', 'cyan');
-    addLine('  a -d [文件名]                # 下載', 'green');
-    addLine('  a -o [目標路徑或./]          # 指定檔名/本地操作', 'green');
-    addLine('  a -r1 或 a -r 1              # 刪除【倒數第 1 行】', 'yellow');
-    addLine('  a -r1-100 或 a -r 1-100      # 刪除【倒數 1 至 100 行】', 'yellow');
-    addLine('  a -r [關鍵字]                # 刪除包含該關鍵字的所有行', 'yellow');
-    addLine('  a -w                         #【網頁管理引擎】啟動 Web 視覺化前台伺服器 (Ctrl+C 停止)', 'cyan');
-    addLine('  a -b                         # 操作全部', 'purple');
-    addLine('    -bs                        # 推送本地檔案目錄全部文件，覆蓋遠端 Gist 倉庫', 'purple');
-    addLine('    -bd                        # 拉取遠端 Gist 全部文件，覆蓋本地檔案目錄', 'purple');
-    addLine('  a -i                         # 系統重新配置 /金鑰/Gist ID/檔案目錄/Token (不可參數搭配)', 'red');
+    for (const infoLine of A_INFO_LINES) {
+      addLine(infoLine);
+    }
     return lines;
   }
 
@@ -106,7 +119,7 @@ export async function executeCommand(
   const currentYear = new Date().getFullYear().toString();
   const defaultFileName = `${currentYear}.note.gpg`;
 
-  // 1. a (無參數) -> 顯示系統儀表板
+  // 1. a (無參數) -> 顯示系統儀表板與標準用法手冊 (與 /a.info 完全一致)
   if (args.length === 0) {
     addLine('┌────────────────────────────────────────────────────────────┐', 'cyan');
     addLine('│ 🛡️  Cyber-NOte 賽博靈感管家 · 系統儀表板                   │', 'cyan', true);
@@ -116,17 +129,9 @@ export async function executeCommand(
     addLine(`│ 🌐 Gist ID  : ${(config.gistId || '未配置').padEnd(44)} │`, 'cyan');
     addLine(`│ 🛡️ 憑證狀態 : ${(config.tokenDecrypted ? '已就緒 (Decrypted)' : '未配置').padEnd(44)} │`, 'yellow');
     addLine('└────────────────────────────────────────────────────────────┘', 'cyan');
-    addLine("用法: a [靈感創意/支援多行]       # 追加寫入並整檔 GPG 鎖定公鑰加密", 'gray');
-    addLine("      cat 檔案 | a                 #【管道串流】直接吸納字串流加密追加", 'gray');
-    addLine("      a -a                         # 解密並雙色交替列印今年度機密文檔", 'gray');
-    addLine("      a -s [檔名]                  # 推送指定或年度加密文檔至 GitHub Gist", 'gray');
-    addLine("      a -l                         # 檢索雲端 Gist 倉庫檔案清單 (強制拉取最新)", 'gray');
-    addLine("      a -m [舊檔名] [新檔名]       # 重命名本地/遠端檔案", 'gray');
-    addLine("      a -f [檔名]                  # 刪除檔案/遠端檔案", 'gray');
-    addLine("      a -d [檔名] [-o 目標路徑]    # 下載檔案至本地", 'gray');
-    addLine("      a -r1 / a -r 1-100 / a -r 詞 # 行級過濾剔除並重新加密存盤", 'gray');
-    addLine("      a -bs / a -bd                # 批次推送覆蓋遠端 / 批次拉取覆蓋本地", 'gray');
-    addLine("      a -i                         # 系統重新配置引導精靈 (不可參數搭配)", 'gray');
+    for (const infoLine of A_INFO_LINES) {
+      addLine(infoLine);
+    }
     return lines;
   }
 
