@@ -2,7 +2,7 @@
 // Cyber-NOte 金鑰審計與加密檔案歸檔模組 (支援 GPG Packet 封包解析)
 
 use chrono::Local;
-use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, Table};
+use comfy_table::{presets::NOTHING, Attribute, Cell, Color, Table};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -182,7 +182,7 @@ pub fn print_ledger_table() {
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_preset(NOTHING);
     table.set_header(vec![
         Cell::new("加密檔案名稱").add_attribute(Attribute::Bold).fg(Color::Cyan),
         Cell::new("GPG Packet 封包解析金鑰 ID").add_attribute(Attribute::Bold).fg(Color::Green),

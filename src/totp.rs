@@ -1,4 +1,5 @@
 use chrono::Utc;
+use comfy_table::{presets::NOTHING, Cell, Color, Table};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use std::collections::HashMap;
@@ -210,12 +211,18 @@ fn print_totp_index_list(secrets: &HashMap<String, String>) {
     let mut keys: Vec<String> = secrets.keys().cloned().collect();
     keys.sort();
 
-    println!("\n🛡️ Cyber-NOte TOTP 雙重認證項目列表:");
-    println!("────────────────────────────────────────────────────────────");
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
+
     for (idx, label) in keys.iter().enumerate() {
-        println!("  [{:02}] {}", idx + 1, label);
+        table.add_row(vec![
+            Cell::new(format!("[{:02}]", idx + 1)).fg(Color::Cyan),
+            Cell::new(label).fg(Color::White),
+        ]);
     }
-    println!("────────────────────────────────────────────────────────────");
+
+    println!("\n🛡️  Cyber-NOte TOTP 雙重認證項目列表:");
+    println!("{}", table);
     println!("💡 取得驗證碼: 'a -t [標籤]' (例: a -t google 或 a -t 1)");
     println!("💡 新增密鑰:   'a -t [標籤] [密鑰]'");
 }

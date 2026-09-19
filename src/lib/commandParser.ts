@@ -121,14 +121,13 @@ export async function executeCommand(
 
   // 1. a (無參數) -> 顯示系統儀表板與標準用法手冊 (與 /a.info 完全一致)
   if (args.length === 0) {
-    addLine('┌────────────────────────────────────────────────────────────┐', 'cyan');
-    addLine('│ 🛡️  Cyber-NOte 賽博靈感管家 · 系統儀表板                   │', 'cyan', true);
-    addLine('├────────────────────────────────────────────────────────────┤', 'cyan');
-    addLine(`│ 📂 存儲目錄 : ${(config.noteDir || '未配置').padEnd(44)} │`, 'white');
-    addLine(`│ 🔑 GPG 金鑰 : ${(config.gpgKeyId || '未配置').padEnd(44)} │`, 'green');
-    addLine(`│ 🌐 Gist ID  : ${(config.gistId || '未配置').padEnd(44)} │`, 'cyan');
-    addLine(`│ 🛡️ 憑證狀態 : ${(config.tokenDecrypted ? '已就緒 (Decrypted)' : '未配置').padEnd(44)} │`, 'yellow');
-    addLine('└────────────────────────────────────────────────────────────┘', 'cyan');
+    addLine('🛡️  Cyber-NOte 賽博靈感管家 · 系統狀態', 'cyan', true);
+    addLine(`📂 存儲目錄 : ${config.noteDir || '未配置'}`, 'white');
+    addLine(`🔒 隱私隔離 : ~/.local/share/cyber-note/secrets/token.gpg`, 'cyan');
+    addLine(`🔑 GPG 金鑰 : ${config.gpgKeyId || '未配置'}`, 'green');
+    addLine(`🌐 Gist ID  : ${config.gistId || '未配置'}`, 'cyan');
+    addLine(`🛡️ 憑證狀態 : ${config.tokenDecrypted ? '已就緒 (Decrypted)' : '未配置'}`, 'yellow');
+    addLine(`⚡ 架構核心 : Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎`, 'cyan');
     for (const infoLine of A_INFO_LINES) {
       addLine(infoLine);
     }
@@ -558,9 +557,8 @@ export async function executeCommand(
       const cleanGistId = config.gistId.split('/').pop() || config.gistId;
       const gistUrl = `https://gist.github.com/${cleanGistId}`;
       addLine('', 'white');
-      addLine(' 🛡️  Cyber-NOte 檔案清單', 'white', true);
+      addLine('🛡️  Cyber-NOte 檔案清單', 'white', true);
       addLine(`🌐 倉庫網址 : ${gistUrl}`, 'cyan');
-      addLine('────────────────────────────────────────────────────────────', 'gray');
 
       // 🌟 永遠以遠端為準，覆蓋本地持久化配置與快取！
       const currentLocal = loadAllNotes();
@@ -585,9 +583,8 @@ export async function executeCommand(
         const num = String(idx + 1).padStart(2, '0');
         const isEnc = f.filename.endsWith('.gpg') || f.filename.endsWith('.asc');
         const icon = isEnc ? '🛡️' : '💡';
-        addLine(`[${num}] ${icon} ${f.filename}`, isEnc ? 'green' : 'cyan');
+        addLine(`[${num}]  ${icon}  ${f.filename}`, isEnc ? 'green' : 'cyan');
       });
-      addLine('────────────────────────────────────────────────────────────', 'gray');
       addLine("💡 可使用 'a -d [檔名]' 下載，或 'a -x [檔名]' 自動破甲解密還原。", 'green');
     } catch (e) {
       addLine(`⚠️ 獲取清單失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');

@@ -3,7 +3,7 @@
 // 核心架構：嚴格鎖定 GPG 金鑰隔離體系（嚴禁 SSH 金鑰混用）、多層巢狀加密封裝、高迭代 S2K 防窮舉加固與金鑰歸檔簿審計。
 
 use chrono::Local;
-use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, Table};
+use comfy_table::{presets::NOTHING, Attribute, Cell, Color, Table};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
@@ -46,9 +46,7 @@ fn prompt_input(prompt: &str, default: Option<&str>) -> String {
 
 // 🛡️ 系統初始化配置精靈 (嚴格 GPG 鎖定)
 fn run_init_wizard() {
-    println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║       🛡️  Cyber-NOte 機密系統 · 基礎配置與金鑰鎖定         ║");
-    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!("\n🛡️  Cyber-NOte 機密系統 · 基礎配置與金鑰鎖定");
     println!("提示: 直接按下 Enter 可保留括號中的 [現有配置/預設值]。\n");
 
     let current_dir = GameConfig::get_note_dir();
@@ -263,9 +261,7 @@ fn print_content_colored(raw_content: &str) {
 // 📚 Web 管理引擎核心依賴科普與安裝指引
 #[allow(dead_code)]
 fn print_web_dependencies_guide(missing_tsx: bool, missing_express: bool) {
-    println!("\n╔══════════════════════════════════════════════════════════════════════╗");
-    println!("║         📚 Web 安全管理引擎 · 核心依賴科普與安裝指引                 ║");
-    println!("╚══════════════════════════════════════════════════════════════════════╝");
+    println!("\n📚 Web 安全管理引擎 · 核心依賴科普與安裝指引");
     println!("❌ 無法啟動 Web 管理介面：檢測到系統尚未安裝或缺少關鍵運行時依賴！\n");
     if missing_tsx {
         println!("  ⚠️  缺少關鍵模組: tsx (TypeScript Execute 引擎)");
@@ -552,19 +548,17 @@ fn handle_show_command(args: &[String], verbose: bool) {
     let status_str = if !is_gpg { "📄 明文" } else { "🛡️ GPG/RSA" };
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    table.set_header(vec![
-        Cell::new("屬性項目").add_attribute(Attribute::Bold).fg(Color::Cyan),
-        Cell::new(format!("🛡️  Cyber-NOte 檔案鑑識與金鑰審計詳情 [{}]", filename)).add_attribute(Attribute::Bold).fg(Color::Green),
-    ]);
-    table.add_row(vec![Cell::new("檔案名稱").fg(Color::Cyan), Cell::new(filename)]);
-    table.add_row(vec![Cell::new("檔案狀態").fg(Color::Cyan), Cell::new(status_str)]);
-    table.add_row(vec![Cell::new("雲端備份").fg(Color::Cyan), Cell::new(cloud_status)]);
-    table.add_row(vec![Cell::new("金鑰短碼").fg(Color::Cyan), Cell::new(key_id)]);
-    table.add_row(vec![Cell::new("加密體系").fg(Color::Cyan), Cell::new(cipher_mode)]);
-    table.add_row(vec![Cell::new("封裝層級").fg(Color::Cyan), Cell::new(format!("第 {} 層", layer))]);
-    table.add_row(vec![Cell::new("檔案大小").fg(Color::Cyan), Cell::new(format!("{} Bytes", bytes_size))]);
-    table.add_row(vec![Cell::new("審計備註").fg(Color::Cyan), Cell::new(notes)]);
+    table.load_preset(NOTHING);
+    table.add_row(vec![Cell::new("檔案名稱 :").fg(Color::Cyan), Cell::new(filename)]);
+    table.add_row(vec![Cell::new("檔案狀態 :").fg(Color::Cyan), Cell::new(status_str)]);
+    table.add_row(vec![Cell::new("雲端備份 :").fg(Color::Cyan), Cell::new(cloud_status)]);
+    table.add_row(vec![Cell::new("金鑰短碼 :").fg(Color::Cyan), Cell::new(key_id)]);
+    table.add_row(vec![Cell::new("加密體系 :").fg(Color::Cyan), Cell::new(cipher_mode)]);
+    table.add_row(vec![Cell::new("封裝層級 :").fg(Color::Cyan), Cell::new(format!("第 {} 層", layer))]);
+    table.add_row(vec![Cell::new("檔案大小 :").fg(Color::Cyan), Cell::new(format!("{} Bytes", bytes_size))]);
+    table.add_row(vec![Cell::new("審計備註 :").fg(Color::Cyan), Cell::new(notes)]);
+
+    println!("\n🛡️  Cyber-NOte 檔案鑑識與金鑰審計詳情 [{}]", filename);
     println!("{}", table);
 }
 
@@ -745,36 +739,37 @@ fn handle_list_and_ledger_command(verbose: bool) {
     }
     local_only_files.sort();
 
-    // 🌟 佈局修正：檔案名前添加編號和圖標信息 (🛡️ 遠端 Gist 倉庫文件, 💡 尚未上傳本地文件)
-    // 顏色使用預設黑白灰，白色、灰色交替換行
-    println!("\n 🛡️  Cyber-NOte 檔案清單");
+    println!("\n🛡️  Cyber-NOte 檔案清單");
     let gist_id = GameConfig::get_gist_id().unwrap_or_default();
     if !gist_id.is_empty() && gist_id != "未配置" {
         let clean_id = GameConfig::extract_clean_id(&gist_id);
         println!("🌐 倉庫網址 : https://gist.github.com/{}", clean_id);
     }
-    println!("────────────────────────────────────────────────────────────────────────────");
+
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
 
     let mut counter = 1;
-    let mut idx = 0;
 
     for filename in &cloud_file_names {
-        let line_str = format!("[{:02}] 🛡️ {}", counter, filename);
-        let color = if idx % 2 == 0 { TerminalColor::Normal } else { TerminalColor::Gray };
-        paint_line(&line_str, color);
+        table.add_row(vec![
+            Cell::new(format!("[{:02}]", counter)).fg(Color::Cyan),
+            Cell::new("🛡️"),
+            Cell::new(filename).fg(Color::White),
+        ]);
         counter += 1;
-        idx += 1;
     }
 
     for filename in &local_only_files {
-        let line_str = format!("[{:02}] 💡 {}", counter, filename);
-        let color = if idx % 2 == 0 { TerminalColor::Normal } else { TerminalColor::Gray };
-        paint_line(&line_str, color);
+        table.add_row(vec![
+            Cell::new(format!("[{:02}]", counter)).fg(Color::Cyan),
+            Cell::new("💡"),
+            Cell::new(filename).fg(Color::Yellow),
+        ]);
         counter += 1;
-        idx += 1;
     }
 
-    println!("────────────────────────────────────────────────────────────────────────────");
+    println!("{}", table);
     println!("💡 想查看檔案詳細資訊，請使用參數: a --show <文件名>");
     println!("💡 同步今年筆記並檢視清單: a -l -s (或 a -l --sync)\n");
 }
@@ -823,9 +818,7 @@ fn handle_remote_encrypt_command(args: &[String], verbose: bool) {
         }
     };
 
-    println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║       🛡️  Cyber-NOte 遠端檔案在位套殼加密 (In-Place Encapsulate)║");
-    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!("\n🛡️  Cyber-NOte 遠端檔案在位套殼加密 (In-Place Encapsulate)");
     println!("目標遠端檔案: {}", target_file);
     if delete_original {
         println!("策略：原明文檔案將在遠端徹底刪除銷毀，僅留存加密密文殼！");
@@ -941,9 +934,7 @@ fn handle_web_command(port_opt: Option<&str>) {
         return;
     }
 
-    println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║          🛡️  Cyber-NOte 系統 · Web 視覺化前台伺服器           ║");
-    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!("\n🛡️  Cyber-NOte 系統 · Web 視覺化伺服器 (Port: {})", port);
     println!("🚀 Web 伺服器正在前台監聽運行中...");
     println!("🌐 存取位址: http://localhost:{}", port);
     println!("📊 架構核心: Rust 原生獨立 Web 引擎 (免安裝外掛/套件，純原生極致運行)");
@@ -2370,35 +2361,32 @@ fn main() {
         let ledger = a::ledger::load_ledger();
 
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_header(vec![
-            Cell::new("項目").add_attribute(Attribute::Bold).fg(Color::Cyan),
-            Cell::new("🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態").add_attribute(Attribute::Bold).fg(Color::Green),
-        ]);
+        table.load_preset(NOTHING);
         table.add_row(vec![
-            Cell::new("📂 存儲目錄").fg(Color::Cyan),
+            Cell::new("📂 存儲目錄 :").fg(Color::Cyan),
             Cell::new(note_dir.to_str().unwrap_or("")),
         ]);
         table.add_row(vec![
-            Cell::new("🔒 隱私隔離").fg(Color::Cyan),
+            Cell::new("🔒 隱私隔離 :").fg(Color::Cyan),
             Cell::new(secrets_dir.join("token.gpg").to_str().unwrap_or("")),
         ]);
         table.add_row(vec![
-            Cell::new("🔑 GPG 金鑰").fg(Color::Cyan),
+            Cell::new("🔑 GPG 金鑰 :").fg(Color::Cyan),
             Cell::new(&current_key),
         ]);
         table.add_row(vec![
-            Cell::new("🌐 Gist ID").fg(Color::Cyan),
+            Cell::new("🌐 Gist ID  :").fg(Color::Cyan),
             Cell::new(&current_gist),
         ]);
         table.add_row(vec![
-            Cell::new("📜 金鑰歸檔").fg(Color::Cyan),
+            Cell::new("📜 金鑰歸檔 :").fg(Color::Cyan),
             Cell::new(format!("已收錄 {} 筆加密檔案審計記錄", ledger.records.len())),
         ]);
         table.add_row(vec![
-            Cell::new("⚡ 架構核心").fg(Color::Cyan),
+            Cell::new("⚡ 架構核心 :").fg(Color::Cyan),
             Cell::new("Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎"),
         ]);
+        println!("🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態");
         println!("{}", table);
         print!("{}", include_str!("../a.info"));
         return;
