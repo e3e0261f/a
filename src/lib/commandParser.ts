@@ -1,7 +1,7 @@
 import { AppConfig, NoteFile, TerminalOutputLine } from '../types';
 import { encryptWithGpg, decryptWithGpg } from './crypto';
-import { readNote, saveNote, loadAllNotes, saveAppConfig } from './storage';
-import { listGistFiles, fetchFromGist, syncToGist } from './gist';
+import { readNote, saveNote, loadAllNotes, saveAppConfig, saveAllNotes } from './storage';
+import { listGistFiles, fetchFromGist, syncToGist, deleteFromGist } from './gist';
 
 export async function executeCommand(
   rawInput: string,
@@ -51,6 +51,7 @@ export async function executeCommand(
     addLine('  a -s / a --sync           推送當前年度加密筆記至 GitHub Gist', 'green');
     addLine('  a -s [檔名] --raw         明文模式外傳檔案至 Gist (-u)', 'yellow');
     addLine('  a -l / a --list           掃描並列出 GitHub Gist 雲端倉庫檔案清單', 'cyan');
+    addLine('  a -l -s / a -l --sync     上傳今年筆記並顯示雲端清單 (-l -s 組合)', 'green');
     addLine('  a -d --all                批量下載 GitHub Gist 雲端倉庫全部檔案', 'green');
     addLine('  a -d [檔名] -o [目標路徑]   自訂檔名或加 ./ 下載文件到本地工作目錄', 'green');
     addLine('  a -d [檔名] [-x]          下載雲端檔案 (-x 為自動破甲解密還原)', 'green');
@@ -232,19 +233,97 @@ export async function executeCommand(
     return lines;
   }
 
-  // 5. a -s / a --sync
-  if (args[0] === '-s' || args[0] === '--sync') {
+  // 判斷是否要求雲端同步 (a -s / a --sync) 或列出清單 (a -l / a --list)
+  const isSync = args.some(
+    (a) => a === '-s' || a === '--sync' || (a.startsWith('-') && !a.startsWith('--') && a.includes('s') && !a.includes('p') && !a.includes('e'))
+  );
+  const isList = args.some(
+    (a) => a === '-l' || a === '--list' || (a.startsWith('-') && !a.startsWith('--') && a.includes('l'))
+  );
+
+  const executeSync = async () => {
     if (!config.gistId) {
       addLine('❌ 錯誤：未配置雲端 Gist ID。請執行 a --init 或在設定中填入 Gist ID。', 'red');
-      return lines;
+      return;
     }
     if (!config.tokenDecrypted) {
       addLine('❌ 錯誤：未配置 GitHub Token。請執行 a --init 設定具備 gist 權限之 Token。', 'red');
-      return lines;
+      return;
     }
 
     const isRaw = args.includes('--raw') || args.includes('-u');
-    const customTarget = args.slice(1).find((a) => a !== '--raw' && a !== '-u' && !a.startsWith('-'));
+    const isAll = args.includes('--all') || args.includes('-a');
+
+    // 🌟 a -s --all 遞迴上傳用戶檔案目錄裡的所有檔案，以本地目錄為準與遠端對齊（刪除雲端孤立檔案）
+    if (isAll) {
+      addLine('📡 [雲端檢索] 正在連線 GitHub Gist 比對遠端 Hash 與清單，請稍候...', 'cyan');
+      try {
+        const remoteFiles = await listGistFiles(config.gistId, config.tokenDecrypted);
+        const cleanGistId = config.gistId.split('/').pop() || config.gistId;
+        addLine(`🌐 倉庫網址 : https://gist.github.com/${cleanGistId}`, 'cyan', true);
+
+        const localNotes = loadAllNotes();
+        const localEntries = Object.entries(localNotes);
+
+        if (localEntries.length === 0) {
+          addLine('ℹ️ 本地目錄中沒有找到任何檔案可供同步。', 'yellow');
+          return;
+        }
+
+        addLine(`☁️ [雲端同步] 本地共有 ${localEntries.length} 個檔案，開始遞迴同步並以本地為準對齊遠端...`, 'cyan', true);
+
+        // 1. 上傳本地檔案至遠端
+        let uploadedCount = 0;
+        const localExpectedRemoteNames = new Set<string>();
+
+        for (let idx = 0; idx < localEntries.length; idx++) {
+          const [key, note] = localEntries[idx];
+          const fileName = note.filename || key;
+          const remoteTargetName = fileName.endsWith('.gpg') || isRaw ? fileName : `${fileName}.gpg`;
+          localExpectedRemoteNames.add(remoteTargetName);
+
+          const payload = isRaw
+            ? (note.decryptedContent || (await decryptWithGpg(note.content, config.gpgKeyId).catch(() => note.content)))
+            : note.content;
+
+          addLine(`  [${idx + 1}/${localEntries.length}] 正在推送: ${remoteTargetName}...`, 'gray');
+          try {
+            await syncToGist(config.gistId, remoteTargetName, payload, config.tokenDecrypted);
+            addLine(`    ✨ 推送成功: ${remoteTargetName}`, 'green');
+            uploadedCount++;
+          } catch (e) {
+            addLine(`    ⚠️ 推送失敗 (${remoteTargetName}): ${e instanceof Error ? e.message : String(e)}`, 'red');
+          }
+        }
+
+        // 2. 刪除遠端存在但本地已不存在的孤立檔案（以本地目錄為準對齊）
+        const orphans = remoteFiles.filter((rf) => !localExpectedRemoteNames.has(rf.filename));
+        let deletedCount = 0;
+        if (orphans.length > 0) {
+          addLine(`🧹 [遠端清理] 發現 ${orphans.length} 個遠端孤立檔案，正在清理以與本地對齊...`, 'yellow');
+          for (const orphan of orphans) {
+            try {
+              await deleteFromGist(config.gistId, orphan.filename, config.tokenDecrypted);
+              addLine(`  🗑️ 已刪除遠端孤立檔案: ${orphan.filename}`, 'yellow');
+              deletedCount++;
+            } catch (e) {
+              addLine(`  ⚠️ 刪除遠端檔案失敗 (${orphan.filename}): ${e instanceof Error ? e.message : String(e)}`, 'red');
+            }
+          }
+        }
+
+        addLine(
+          `\n☁️ [GitHub] 批量同步完成！已推送 ${uploadedCount}/${localEntries.length} 個本地檔案，清理 ${deletedCount} 個遠端孤立檔案。遠端已完全與本地對齊！`,
+          'green',
+          true
+        );
+      } catch (e) {
+        addLine(`⚠️ [GitHub] 批量同步失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
+      }
+      return;
+    }
+
+    const customTarget = args.slice(1).find((a) => !a.startsWith('-') && a !== 'sync' && a !== 'list');
 
     let remoteFileName = defaultFileName;
     let payload = '';
@@ -253,7 +332,7 @@ export async function executeCommand(
       const note = readNote(customTarget);
       if (!note) {
         addLine(`❌ 錯誤：找不到本地檔案【${customTarget}】`, 'red');
-        return lines;
+        return;
       }
       if (isRaw) {
         payload = note.decryptedContent || (await decryptWithGpg(note.content, config.gpgKeyId));
@@ -266,7 +345,7 @@ export async function executeCommand(
       const note = readNote(defaultFileName);
       if (!note || !note.content) {
         addLine('📂 本地空空如也，沒有什麼好同步的。請先寫入靈感: a [內容]', 'yellow');
-        return lines;
+        return;
       }
       payload = note.content;
       remoteFileName = defaultFileName;
@@ -283,14 +362,12 @@ export async function executeCommand(
     } catch (e) {
       addLine(`⚠️ [GitHub] 傳輸失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
     }
-    return lines;
-  }
+  };
 
-  // 6. a -l / a --list
-  if (args[0] === '-l' || args[0] === '--list') {
+  const executeList = async () => {
     if (!config.gistId) {
       addLine('❌ 錯誤：未配置雲端 Gist ID。請執行 a --init 進行設定。', 'red');
-      return lines;
+      return;
     }
     addLine('📡 [雲端雷達] 正在掃描 GitHub Gist 倉庫物資清單...', 'cyan');
     try {
@@ -308,6 +385,26 @@ export async function executeCommand(
     } catch (e) {
       addLine(`⚠️ 獲取清單失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
     }
+  };
+
+  // 🌟 組合命令：a -l --sync / a -l -s / a -s -l / a --sync -l / a -sl / a -ls
+  // 上傳年份 gpg 檔案 + 緊接著顯示遠端檔案清單
+  if (isSync && isList) {
+    await executeSync();
+    addLine('', 'gray');
+    await executeList();
+    return lines;
+  }
+
+  // 5. 單獨同步 a -s / a --sync
+  if (isSync) {
+    await executeSync();
+    return lines;
+  }
+
+  // 6. 單獨查看清單 a -l / a --list
+  if (isList) {
+    await executeList();
     return lines;
   }
 
@@ -403,8 +500,37 @@ export async function executeCommand(
           }
         }
 
-        onNotesChange(loadAllNotes());
-        addLine(`\n✨ 全部下載完成！共成功下載 ${successCount}/${fileItems.length} 個檔案至本地。`, 'green', true);
+        // 依遠端為基準與本地對齊：刪除本地存在但遠端不存在的孤立檔案
+        const currentAllLocal = loadAllNotes();
+        const remoteNameSet = new Set(fileItems.map((f) => f.filename));
+        const remoteBaseNames = new Set(fileItems.map((f) => f.filename.replace(/\.gpg$/, '')));
+
+        let localDeletedCount = 0;
+        const updatedLocalNotes: Record<string, NoteFile> = {};
+
+        for (const [key, note] of Object.entries(currentAllLocal)) {
+          const fn = note.filename || key;
+          const fnBase = fn.replace(/\.gpg$/, '');
+          if (remoteNameSet.has(fn) || remoteNameSet.has(`${fn}.gpg`) || remoteBaseNames.has(fnBase)) {
+            updatedLocalNotes[key] = note;
+          } else {
+            addLine(`  🗑️ [本地清理] 遠端不存在，已刪除本地孤立檔案: ${fn}`, 'yellow');
+            localDeletedCount++;
+          }
+        }
+
+        if (localDeletedCount > 0) {
+          saveAllNotes(updatedLocalNotes);
+          onNotesChange(updatedLocalNotes);
+        } else {
+          onNotesChange(loadAllNotes());
+        }
+
+        addLine(
+          `\n✨ 全部下載與對齊完成！共下載 ${successCount}/${fileItems.length} 個遠端檔案，清理 ${localDeletedCount} 個本地孤立檔案。本地已完全與遠端對齊！`,
+          'green',
+          true
+        );
       } catch (e) {
         addLine(`⚠️ 批量獲取清單失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
       }
