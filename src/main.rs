@@ -3,6 +3,7 @@
 // 核心架構：嚴格鎖定 GPG 金鑰隔離體系（嚴禁 SSH 金鑰混用）、多層巢狀加密封裝、高迭代 S2K 防窮舉加固與金鑰歸檔簿審計。
 
 use chrono::Local;
+use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, Table};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
@@ -550,18 +551,21 @@ fn handle_show_command(args: &[String], verbose: bool) {
     let cloud_status = if in_cloud || entry_opt.is_some() { "🌐 雲端已備份" } else { "❌ 僅本地存在" };
     let status_str = if !is_gpg { "📄 明文" } else { "🛡️ GPG/RSA" };
 
-    println!("┌────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ 🛡️  Cyber-NOte 檔案鑑識與金鑰審計詳情                                       │");
-    println!("├────────────────────────────────────────────────────────────────────────────┤");
-    println!("│ 檔案名稱 : {:<64} │", filename);
-    println!("│ 檔案狀態 : {:<64} │", status_str);
-    println!("│ 雲端備份 : {:<64} │", cloud_status);
-    println!("│ 金鑰短碼 : {:<64} │", key_id);
-    println!("│ 加密體系 : {:<64} │", cipher_mode);
-    println!("│ 封裝層級 : {:<64} │", format!("第 {} 層", layer));
-    println!("│ 檔案大小 : {:<64} │", format!("{} Bytes", bytes_size));
-    println!("│ 審計備註 : {:<64} │", notes);
-    println!("└────────────────────────────────────────────────────────────────────────────┘");
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec![
+        Cell::new("屬性項目").add_attribute(Attribute::Bold).fg(Color::Cyan),
+        Cell::new(format!("🛡️  Cyber-NOte 檔案鑑識與金鑰審計詳情 [{}]", filename)).add_attribute(Attribute::Bold).fg(Color::Green),
+    ]);
+    table.add_row(vec![Cell::new("檔案名稱").fg(Color::Cyan), Cell::new(filename)]);
+    table.add_row(vec![Cell::new("檔案狀態").fg(Color::Cyan), Cell::new(status_str)]);
+    table.add_row(vec![Cell::new("雲端備份").fg(Color::Cyan), Cell::new(cloud_status)]);
+    table.add_row(vec![Cell::new("金鑰短碼").fg(Color::Cyan), Cell::new(key_id)]);
+    table.add_row(vec![Cell::new("加密體系").fg(Color::Cyan), Cell::new(cipher_mode)]);
+    table.add_row(vec![Cell::new("封裝層級").fg(Color::Cyan), Cell::new(format!("第 {} 層", layer))]);
+    table.add_row(vec![Cell::new("檔案大小").fg(Color::Cyan), Cell::new(format!("{} Bytes", bytes_size))]);
+    table.add_row(vec![Cell::new("審計備註").fg(Color::Cyan), Cell::new(notes)]);
+    println!("{}", table);
 }
 
 // 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k)
@@ -1807,11 +1811,19 @@ fn remove_empty_dirs_recursive(dir: &Path) {
     }
 }
 
-// ☁️ 雲端同步與對齊 (a -s / a --sync / a -s --all)
+// ☁️ 雲端同步與對齊 (a -s / a --sync / a -s --all / a -bs / a -sb)
 fn handle_sync_command(args: &[String], verbose: bool) {
     let timer = Instant::now();
     let is_raw = args.iter().any(|arg| arg == "--raw" || arg == "-u");
-    let is_all = args.iter().skip(1).any(|arg| arg == "--all" || arg == "-a");
+    let is_all = args.iter().skip(1).any(|arg| {
+        arg == "--all"
+            || arg == "-a"
+            || arg == "-b"
+            || arg == "-bs"
+            || arg == "-sb"
+            || arg == "all"
+            || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('b'))
+    });
 
     let token = match get_github_token(verbose) {
         Ok(t) => t,
@@ -2022,11 +2034,19 @@ fn handle_sync_command(args: &[String], verbose: bool) {
     }
 }
 
-// ☁️ 雲端下載與自動解密對齊 (a -d / a --download / a -d --all)
+// ☁️ 雲端下載與自動解密對齊 (a -d / a --download / a -d --all / a -bd / a -db)
 fn handle_download_command(args: &[String], verbose: bool) {
     let timer = Instant::now();
     let should_decrypt = args.iter().any(|arg| arg == "-x" || arg == "--decrypt");
-    let is_all = args.iter().skip(1).any(|arg| arg == "--all" || arg == "-a");
+    let is_all = args.iter().skip(1).any(|arg| {
+        arg == "--all"
+            || arg == "-a"
+            || arg == "-b"
+            || arg == "-bd"
+            || arg == "-db"
+            || arg == "all"
+            || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('b'))
+    });
 
     let mut out_path_opt: Option<String> = None;
     let mut skip_next = false;
@@ -2349,22 +2369,37 @@ fn main() {
         let secrets_dir = GameConfig::get_secrets_dir();
         let ledger = a::ledger::load_ledger();
 
-        println!("┌────────────────────────────────────────────────────────────┐");
-        println!("│ 🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態            │");
-        println!("├────────────────────────────────────────────────────────────┤");
-        println!("│ 📂 存儲目錄 : {:<44} │", note_dir.to_str().unwrap_or(""));
-        println!("│ 🔒 隱私隔離 : {:<44} │", secrets_dir.join("token.gpg").to_str().unwrap_or(""));
-        println!("│ 🔑 GPG 金鑰 : {:<44} │", current_key);
-        println!("│ 🌐 Gist ID  : {:<44} │", current_gist);
-        println!(
-            "│ 📜 金鑰歸檔 : {:<44} │",
-            format!("已收錄 {} 筆加密檔案審計記錄", ledger.records.len())
-        );
-        println!(
-            "│ ⚡ 架構核心 : {:<44} │",
-            "Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎"
-        );
-        println!("└────────────────────────────────────────────────────────────┘");
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_header(vec![
+            Cell::new("項目").add_attribute(Attribute::Bold).fg(Color::Cyan),
+            Cell::new("🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態").add_attribute(Attribute::Bold).fg(Color::Green),
+        ]);
+        table.add_row(vec![
+            Cell::new("📂 存儲目錄").fg(Color::Cyan),
+            Cell::new(note_dir.to_str().unwrap_or("")),
+        ]);
+        table.add_row(vec![
+            Cell::new("🔒 隱私隔離").fg(Color::Cyan),
+            Cell::new(secrets_dir.join("token.gpg").to_str().unwrap_or("")),
+        ]);
+        table.add_row(vec![
+            Cell::new("🔑 GPG 金鑰").fg(Color::Cyan),
+            Cell::new(&current_key),
+        ]);
+        table.add_row(vec![
+            Cell::new("🌐 Gist ID").fg(Color::Cyan),
+            Cell::new(&current_gist),
+        ]);
+        table.add_row(vec![
+            Cell::new("📜 金鑰歸檔").fg(Color::Cyan),
+            Cell::new(format!("已收錄 {} 筆加密檔案審計記錄", ledger.records.len())),
+        ]);
+        table.add_row(vec![
+            Cell::new("⚡ 架構核心").fg(Color::Cyan),
+            Cell::new("Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎"),
+        ]);
+        println!("{}", table);
         print!("{}", include_str!("../a.info"));
         return;
     }

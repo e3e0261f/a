@@ -2,6 +2,7 @@
 // Cyber-NOte 金鑰審計與加密檔案歸檔模組 (支援 GPG Packet 封包解析)
 
 use chrono::Local;
+use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, Table};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -160,10 +161,6 @@ pub fn extract_key_id_from_gpg_file(path: &std::path::Path) -> String {
 }
 
 pub fn print_ledger_table() {
-    println!("┌────────────────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ 🛡️  Cyber-NOte 金鑰歸檔審計簿 (Key Ledger Manifest & GPG Packet Inspection)            │");
-    println!("├────────────────────────────────────────────────────────────────────────────────────────┤");
-    
     let note_dir = GameConfig::get_note_dir();
     let mut gpg_files = Vec::new();
     if let Ok(entries) = fs::read_dir(&note_dir) {
@@ -180,22 +177,30 @@ pub fn print_ledger_table() {
     }
 
     if gpg_files.is_empty() {
-        println!("  (尚無本地 .gpg 加密檔案供審計)");
-        println!("└────────────────────────────────────────────────────────────────────────────────────────┘");
+        println!("📂 (尚無本地 .gpg 加密檔案供審計)");
         return;
     }
 
-    println!("{:<28} {:<36} {:<24}", "加密檔案名稱", "GPG Packet 封包解析金鑰 ID", "檔案狀態");
-    println!("{:-<28} {:-<36} {:-<24}", "", "", "");
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec![
+        Cell::new("加密檔案名稱").add_attribute(Attribute::Bold).fg(Color::Cyan),
+        Cell::new("GPG Packet 封包解析金鑰 ID").add_attribute(Attribute::Bold).fg(Color::Green),
+        Cell::new("檔案大小").add_attribute(Attribute::Bold).fg(Color::Yellow),
+        Cell::new("檔案狀態").add_attribute(Attribute::Bold).fg(Color::White),
+    ]);
+
     for (name, path) in gpg_files {
         let key_id = extract_key_id_from_gpg_file(&path);
         let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        println!(
-            "{:<28} {:<36} {:<24}",
-            name,
-            key_id,
-            format!("{} bytes (正常)", size)
-        );
+        table.add_row(vec![
+            Cell::new(name).fg(Color::Cyan),
+            Cell::new(key_id).fg(Color::Green),
+            Cell::new(format!("{} Bytes", size)).fg(Color::Yellow),
+            Cell::new("正常 (可信)").fg(Color::White),
+        ]);
     }
-    println!("└────────────────────────────────────────────────────────────────────────────────────────┘");
+
+    println!("🛡️  Cyber-NOte 金鑰歸檔審計簿 (Key Ledger Manifest & GPG Packet Inspection):");
+    println!("{}", table);
 }
