@@ -295,6 +295,9 @@ export async function executeCommand(
     addLine('📡 [雲端雷達] 正在掃描 GitHub Gist 倉庫物資清單...', 'cyan');
     try {
       const files = await listGistFiles(config.gistId, config.tokenDecrypted || '');
+      const cleanGistId = config.gistId.split('/').pop() || config.gistId;
+      const gistUrl = `https://gist.github.com/${cleanGistId}`;
+      addLine(`🌐 倉庫網址 : ${gistUrl}`, 'cyan', true);
       addLine(`📋 雲端現有密文包裹清單 (共 ${files.length} 個)：`, 'white', true);
       addLine('------------------------------------', 'gray');
       files.forEach((f) => {

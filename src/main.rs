@@ -639,6 +639,11 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
     // 🌟 佈局修正：檔案名前添加編號和圖標信息 (🛡️ 遠端 Gist 倉庫文件, 💡 尚未上傳本地文件)
     // 顏色使用預設黑白灰，白色、灰色交替換行
     println!("\n 🛡️  Cyber-NOte 檔案清單");
+    let gist_id = GameConfig::get_gist_id().unwrap_or_default();
+    if !gist_id.is_empty() && gist_id != "未配置" {
+        let clean_id = GameConfig::extract_clean_id(&gist_id);
+        println!("🌐 倉庫網址 : https://gist.github.com/{}", clean_id);
+    }
     println!("────────────────────────────────────────────────────────────────────────────");
 
     let mut counter = 1;

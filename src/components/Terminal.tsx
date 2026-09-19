@@ -177,6 +177,29 @@ export const Terminal: React.FC<TerminalProps> = ({
           if (line.color === 'gray') colorClass = 'text-gray-500';
           if (line.color === 'white') colorClass = 'text-white';
 
+          const renderTextWithLinks = (text: string) => {
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            const parts = text.split(urlRegex);
+            return parts.map((part, i) => {
+              if (part.match(urlRegex)) {
+                return (
+                  <a
+                    key={i}
+                    href={part}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-cyan-300 underline hover:text-cyan-200 transition break-all inline-flex items-center gap-1"
+                    onClick={(e) => e.stopPropagation()}
+                    title="點擊在預設瀏覽器中開啟"
+                  >
+                    {part}
+                  </a>
+                );
+              }
+              return part;
+            });
+          };
+
           return (
             <div
               key={line.id}
@@ -184,7 +207,7 @@ export const Terminal: React.FC<TerminalProps> = ({
                 line.isBold ? 'font-semibold' : 'font-normal'
               }`}
             >
-              {line.text}
+              {renderTextWithLinks(line.text)}
             </div>
           );
         })}
