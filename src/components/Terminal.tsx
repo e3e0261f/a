@@ -116,7 +116,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   const quickCommands = [
     { label: 'a -a (今年筆記)', cmd: 'a -a' },
     { label: 'a (系統儀表)', cmd: 'a' },
-    { label: 'a -w (網頁引擎)', cmd: 'a -w status' },
+    { label: 'a -w (啟動 Web)', cmd: 'a -w' },
     { label: 'a -l (雲端清單)', cmd: 'a -l' },
     { label: 'a -s (雲端同步)', cmd: 'a -s' },
     { label: 'a --init (精靈)', cmd: 'a --init' },

@@ -145,7 +145,7 @@ export const DependencyGuideModal: React.FC<DependencyGuideModalProps> = ({
             {/* Command 1: Global npm install */}
             <div className="p-3 bg-[#080c13] border border-gray-800 rounded-xl space-y-1.5">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-gray-400">方案 A：全域安裝（推薦，全系統使用者均可隨處調用 a --web）</span>
+                <span className="text-gray-400">方案 A：全域安裝（推薦，全系統使用者均可隨處調用 a -w）</span>
                 <button
                   onClick={() => copyToClipboard('npm install -g tsx express', 'global')}
                   className="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded text-[10px] flex items-center gap-1 transition"

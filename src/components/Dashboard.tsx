@@ -156,10 +156,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-gray-400 leading-relaxed">
-              提供金鑰歸檔簿審計、歷史抹除遷移與多層加套加密。平時待機，執行 a --web 時喚醒。
+              提供金鑰歸檔簿審計、歷史抹除遷移與多層加套加密。平時待機，執行 a -w 時喚醒。
             </p>
             <div className="p-2 bg-[#080c13] rounded border border-gray-800/80 text-[11px] text-gray-300 flex items-center justify-between">
-              <span>喚醒指令: <code className="text-cyan-400">a --web</code> 或 <code className="text-cyan-400">a -w</code></span>
+              <span>喚醒指令: <code className="text-cyan-400">a -w</code></span>
               <span className="text-cyan-400">Port: 3000</span>
             </div>
           </div>
@@ -368,7 +368,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <span className="text-gray-400 text-[11px]">雙色交替列印今年</span>
             </div>
             <div className="flex items-center justify-between p-1.5 bg-[#111622] rounded border border-gray-800">
-              <span className="text-cyan-300 font-bold">a -w / a --web</span>
+              <span className="text-cyan-300 font-bold">a -w</span>
               <span className="text-gray-400 text-[11px]">啟動網頁端管理引擎</span>
             </div>
             <div className="flex items-center justify-between p-1.5 bg-[#111622] rounded border border-gray-800">

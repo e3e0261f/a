@@ -96,9 +96,7 @@ export const StandbyConsole: React.FC<StandbyConsoleProps> = ({
             <span>原生命令列調度方式</span>
           </div>
           <div className="p-2 bg-[#070a10] rounded border border-gray-800/80 text-cyan-300 font-mono text-[11px] select-all">
-            $ a --web &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 喚醒並開啟網頁端管理引擎<br />
-            $ a --web status &nbsp;# 檢視網頁引擎狀態<br />
-            $ a --web stop &nbsp;&nbsp;&nbsp;# 關閉網頁端服務 (設回待機模式)
+            $ a -w &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 前台啟動 Web 管理伺服器 (按 Ctrl+C 停止)
           </div>
         </div>
 
@@ -115,7 +113,7 @@ export const StandbyConsole: React.FC<StandbyConsoleProps> = ({
             ) : (
               <Power className="w-3.5 h-3.5" />
             )}
-            <span>開啟網頁端管理引擎 (a --web)</span>
+            <span>開啟網頁端管理引擎 (a -w)</span>
           </button>
         </div>
       </div>

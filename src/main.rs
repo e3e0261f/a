@@ -369,47 +369,23 @@ fn handle_new_repo_command(args: &[String], verbose: bool) {
     }
 }
 
-// 🗑️ 刪除 Gist 中的指定檔案（支援多參數批量與 --all）
+// 🗑️ 刪除檔案/遠端檔案：a -f [文件名]
 fn handle_delete_repo_command(args: &[String], verbose: bool) {
-    let targets: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with('-') || *a == "--all" || *a == "-a").collect();
-    let is_all = args.iter().any(|a| a == "--all" || a == "-a");
-
-    let token = match get_github_token(verbose) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("❌ 無法取得 GitHub Token: {}", e);
-            return;
-        }
-    };
-
-    let files = match list_gist_files(&token, verbose) {
-        Ok(f) => f,
-        Err(_) => Vec::new(),
-    };
-
-    if is_all {
-        println!("🗑️ 正在準備批量刪除遠端 Gist 倉庫中的全部檔案 (共 {} 個)...", files.len());
-        for filename in &files {
-            println!("🗑️ 正在刪除: {}...", filename);
-            match delete_gist_file(filename, &token, verbose) {
-                Ok(_) => {
-                    println!("🗑️ 已成功刪除: {}", filename);
-                    let _ = a::ledger::remove_ledger_entry(filename);
-                }
-                Err(e) => println!("❌ 刪除失敗 ({}): {}", filename, e),
-            }
-        }
-        let mut unified_cfg = GameConfig::read_unified_config();
-        unified_cfg.cached_remote_files = Some(Vec::new());
-        let _ = GameConfig::write_unified_config(&unified_cfg);
-        println!("✨ 全部遠端檔案刪除完畢，本地審計簿與快取已同步清空！");
-        return;
-    }
+    let targets: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).collect();
 
     if targets.is_empty() {
-        println!("❌ 錯誤：請指定欲刪除的檔案名稱或編號。範例: a --delete 1 或 a --delete file1.txt file2.gpg");
+        println!("❌ 錯誤：請指定欲刪除的檔案名稱或編號。範例: a -f 1 或 a -f file1.txt");
         return;
     }
+
+    let note_dir = GameConfig::get_note_dir();
+
+    let token_opt = get_github_token(verbose).ok();
+    let files = if let Some(ref token) = token_opt {
+        list_gist_files(token, verbose).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let mut unified_cfg = GameConfig::read_unified_config();
     let mut cached_files = unified_cfg.cached_remote_files.clone().unwrap_or_else(|| files.clone());
@@ -424,37 +400,107 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
             }
         }
 
-        if !files.contains(&filename_to_delete) {
-            println!("✨ 遠端 Gist 倉庫中已無此檔案: {} (確認已自雲端移除)", filename_to_delete);
-            let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
-            cached_files.retain(|f| f != &filename_to_delete);
-            println!("  ↳ 🧹 已同步清除本地審計簿與快取中關於「{}」的記錄。", filename_to_delete);
-            continue;
+        // 1. 刪除本地檔案（如果存在）
+        let local_file = note_dir.join(&filename_to_delete);
+        if local_file.exists() {
+            match fs::remove_file(&local_file) {
+                Ok(_) => println!("🗑️ 已成功刪除本地檔案: {:?}", local_file),
+                Err(e) => println!("⚠️ 刪除本地檔案失敗: {}", e),
+            }
         }
 
-        println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename_to_delete);
-        match delete_gist_file(&filename_to_delete, &token, verbose) {
+        // 2. 刪除遠端 Gist 檔案（如果有 Token 且遠端存在）
+        if let Some(ref token) = token_opt {
+            if files.contains(&filename_to_delete) {
+                println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename_to_delete);
+                match delete_gist_file(&filename_to_delete, token, verbose) {
+                    Ok(_) => {
+                        println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete);
+                    }
+                    Err(e) => {
+                        if e.contains("422") || e.contains("404") || e.contains("missing_field") {
+                            println!("ℹ️ 遠端 Gist 倉庫已無此檔案 ({}，狀態已對齊)。", filename_to_delete);
+                        } else {
+                            println!("❌ 刪除遠端檔案失敗 ({}): {}", filename_to_delete, e);
+                        }
+                    }
+                }
+            } else {
+                println!("✨ 遠端 Gist 倉庫中已無此檔案: {} (確認已自雲端移除)", filename_to_delete);
+            }
+        }
+
+        // 3. 清理審計簿與快取
+        let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
+        cached_files.retain(|f| f != &filename_to_delete);
+        println!("  ↳ 🧹 已同步清除本地審計簿與快取中關於「{}」的記錄。", filename_to_delete);
+    }
+
+    unified_cfg.cached_remote_files = Some(cached_files);
+    let _ = GameConfig::write_unified_config(&unified_cfg);
+}
+
+// 🏷️ 重命名檔案：a -m [文件名] [新文件名]
+fn handle_rename_command(args: &[String], verbose: bool) {
+    let non_flags: Vec<String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).cloned().collect();
+    if non_flags.len() < 2 {
+        println!("❌ 錯誤：請提供欲更名的檔案名稱與新名稱。");
+        println!("💡 範例: a -m 舊檔名 新檔名 (例: a -m note.txt note_backup.txt)");
+        return;
+    }
+    let old_name = &non_flags[0];
+    let new_name = &non_flags[1];
+
+    let note_dir = GameConfig::get_note_dir();
+    let old_local_path = note_dir.join(old_name);
+    let new_local_path = note_dir.join(new_name);
+
+    let mut renamed_local = false;
+    if old_local_path.exists() {
+        match fs::rename(&old_local_path, &new_local_path) {
             Ok(_) => {
-                println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete);
-                let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
-                cached_files.retain(|f| f != &filename_to_delete);
-                println!("  ↳ 🧹 已同步清除本地審計簿與快取中關於「{}」的記錄。", filename_to_delete);
+                renamed_local = true;
+                println!("✨ 本地檔案重命名成功: {} -> {}", old_name, new_name);
             }
             Err(e) => {
-                if e.contains("422") || e.contains("404") || e.contains("missing_field") {
-                    println!("ℹ️ 遠端 Gist 倉庫已無此檔案 ({}，狀態已對齊)。", filename_to_delete);
-                    let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
-                    cached_files.retain(|f| f != &filename_to_delete);
-                    println!("  ↳ 🧹 已同步清除本地審計簿記錄。");
-                } else {
-                    println!("❌ 刪除遠端檔案失敗 ({}): {}", filename_to_delete, e);
+                println!("⚠️ 本地檔案重命名失敗: {}", e);
+            }
+        }
+    }
+
+    // 嘗試雲端 Gist 重命名
+    if let Ok(token) = get_github_token(verbose) {
+        if let Ok(remote_files) = list_gist_files(&token, verbose) {
+            if remote_files.contains(old_name) {
+                match a::gist::rename_gist_file(old_name, new_name, &token, verbose) {
+                    Ok(_) => {
+                        println!("✨ 雲端 Gist 檔案重命名成功: {} -> {}", old_name, new_name);
+                    }
+                    Err(e) => {
+                        println!("⚠️ 雲端 Gist 檔案重命名失敗: {}", e);
+                    }
                 }
             }
         }
     }
 
-    unified_cfg.cached_remote_files = Some(cached_files);
-    let _ = GameConfig::write_unified_config(&unified_cfg);
+    // 更新審計簿
+    let _ = a::ledger::rename_ledger_entry(old_name, new_name);
+
+    // 更新本地快取
+    let mut unified_cfg = GameConfig::read_unified_config();
+    if let Some(ref mut cached) = unified_cfg.cached_remote_files {
+        for item in cached.iter_mut() {
+            if item == old_name {
+                *item = new_name.clone();
+            }
+        }
+        let _ = GameConfig::write_unified_config(&unified_cfg);
+    }
+
+    if !renamed_local {
+        println!("ℹ️ 若為純雲端檔案，已送出遠端重命名請求並同步更新本地記錄。");
+    }
 }
 
 // 🛡️ 檢視單一檔案詳細鑑識資訊 (a --show <文件名>)
@@ -867,7 +913,7 @@ fn handle_remote_encrypt_command(args: &[String], verbose: bool) {
 }
 
 // 🌐 網頁端管理引擎控制邏輯 (Cyber-NOte Web Engine - Rust 原生零依賴獨立伺服器)
-fn handle_web_command(sub_action: Option<&str>, port_opt: Option<&str>) {
+fn handle_web_command(port_opt: Option<&str>) {
     let port_str = port_opt.unwrap_or("3000");
     let port: u16 = port_str.parse().unwrap_or(3000);
     let config_dir = GameConfig::get_app_config_dir();
@@ -877,86 +923,30 @@ fn handle_web_command(sub_action: Option<&str>, port_opt: Option<&str>) {
     let pid_file = config_dir.join("web.pid");
     let state_file = config_dir.join("web.state");
 
-    match sub_action {
-        Some("stop") => {
-            let _ = fs::write(&state_file, "standby");
-            let mut stopped = false;
-            if pid_file.exists() {
-                if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-                    let pid = pid_str.trim();
-                    if !pid.is_empty() {
-                        println!("🛑 正在停止 Web 網頁端管理引擎 (PID: {})...", pid);
-                        let _ = std::process::Command::new("kill").arg(pid).status();
-                        stopped = true;
-                    }
-                }
-                let _ = fs::remove_file(&pid_file);
-            }
-            if stopped {
-                println!("✨ Web 網頁端管理引擎已進入待機 (STANDBY)。");
-            } else {
-                println!("ℹ️  Web 網頁端管理引擎已切換為待機模式 (STANDBY)。");
-            }
-            println!("💡 Rust 原生核心持續維持後台安全審計與命令處理。可隨時執行 'a --web' 啟動。");
-        }
-        Some("status") => {
-            let is_active = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
-
-            println!("┌────────────────────────────────────────────────────────────┐");
-            println!("│ 🌐 Cyber-NOte Web 網頁端管理引擎 · 狀態監控                │");
-            println!("├────────────────────────────────────────────────────────────┤");
-            println!(
-                "│ 引擎狀態 : {:<47} │",
-                if is_active {
-                    "🟢 運行中 (ACTIVE)"
-                } else {
-                    "⚪ 待機中 (STANDBY - 預設關閉)"
-                }
-            );
-            println!("│ 服務埠號 : {:<47} │", port);
-            println!("│ 存取位址 : {:<47} │", format!("http://localhost:{}", port));
-            println!(
-                "│ 統一設定 : {:<47} │",
-                "~/.local/share/cyber-note/config.json"
-            );
-            println!(
-                "│ 架構核心 : {:<47} │",
-                "Rust 原生獨立 Web 引擎 (免安裝外掛/套件)"
-            );
-            println!("└────────────────────────────────────────────────────────────┘");
-            if !is_active {
-                println!("👉 若要啟動網頁端管理介面，請執行: a --web");
-            } else {
-                println!("👉 若要關閉網頁端管理介面，請執行: a --web stop");
-            }
-        }
-        _ => {
-            let is_already_running = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
-            if is_already_running {
-                let _ = fs::write(&state_file, "active");
-                println!("\n🟢 Cyber-NOte Web 管理引擎已在埠號 {} 正常運行中！", port);
-                println!("🌐 存取位址: http://localhost:{}", port);
-                println!("📄 統一設定: ~/.local/share/cyber-note/config.json");
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(format!("http://localhost:{}", port))
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
-                return;
-            }
-
-            println!("\n╔══════════════════════════════════════════════════════════════╗");
-            println!("║          🛡️  Cyber-NOte 系統 · Web 網頁端管理引擎            ║");
-            println!("╚══════════════════════════════════════════════════════════════╝");
-            println!("🚀 Web 網頁端管理後台已喚醒！");
-            println!("🌐 存取位址: http://localhost:{}", port);
-            println!("📊 架構核心: Rust 原生獨立 Web 引擎 (免安裝外掛/套件，純原生極致運行)");
-            println!("📄 統一設定: ~/.local/share/cyber-note/config.json");
-            println!("💡 提示: 執行 'a --web stop' 可將網頁端切換回待機狀態，按 Ctrl+C 可停止服務。\n");
-
-            start_rust_native_web_server(port, &pid_file, &state_file);
-        }
+    let is_already_running = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
+    if is_already_running {
+        let _ = fs::write(&state_file, "active");
+        println!("\n🟢 Cyber-NOte Web 管理引擎已在埠號 {} 前台運行中！", port);
+        println!("🌐 存取位址: http://localhost:{}", port);
+        println!("📄 統一設定: ~/.local/share/cyber-note/config.json");
+        let _ = std::process::Command::new("xdg-open")
+            .arg(format!("http://localhost:{}", port))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        return;
     }
+
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║          🛡️  Cyber-NOte 系統 · Web 視覺化前台伺服器           ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!("🚀 Web 伺服器正在前台監聽運行中...");
+    println!("🌐 存取位址: http://localhost:{}", port);
+    println!("📊 架構核心: Rust 原生獨立 Web 引擎 (免安裝外掛/套件，純原生極致運行)");
+    println!("📄 統一設定: ~/.local/share/cyber-note/config.json");
+    println!("🛑 提示: 伺服器在前台持續監聽，按下 [ Ctrl + C ] 即可隨時停止 Web 伺服器。\n");
+
+    start_rust_native_web_server(port, &pid_file, &state_file);
 }
 
 // ⚡ 啟動 Rust 原生獨立 Web 伺服器 (Zero-Dependency)
@@ -1374,11 +1364,7 @@ fn get_embedded_dashboard_html() -> &'static str {
         <div class="space-y-2.5 font-mono text-xs">
           <div class="bg-black/50 p-2.5 rounded border border-gray-800">
             <span class="text-emerald-400">a -w</span>
-            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">喚醒 Rust 原生 Web 伺服器</div>
-          </div>
-          <div class="bg-black/50 p-2.5 rounded border border-gray-800">
-            <span class="text-emerald-400">a -w stop</span>
-            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">關閉 Web 伺服器並切換待機</div>
+            <div class="text-gray-400 text-[11px] mt-0.5 font-sans">啟動 Web 伺服器 (Ctrl+C 停止)</div>
           </div>
           <div class="bg-black/50 p-2.5 rounded border border-gray-800">
             <span class="text-emerald-400">a -d --all</span>
@@ -1488,8 +1474,8 @@ fn get_embedded_dashboard_html() -> &'static str {
 
 // 🛡️ 檔案加密（支援多參數批量與 --all）
 fn handle_encrypt_command(args: &[String], verbose: bool) {
-    let is_ep = args.len() > 1 && args[1] == "-ep";
-    let is_all = args.iter().any(|a| a == "--all" || a == "-a");
+    let is_pass_cmd = args.len() > 1 && (args[1] == "-p" || args[1] == "-ep" || args[1] == "-pe");
+    let is_all = args.iter().any(|a| a == "-b" || a == "-a");
     let mut file_paths = Vec::new();
     let mut pass_opt: Option<String> = None;
     let mut key_id_opt: Option<String> = None;
@@ -1497,18 +1483,16 @@ fn handle_encrypt_command(args: &[String], verbose: bool) {
     let mut upload = false;
     let mut out_path_opt: Option<String> = None;
 
-    if is_ep {
+    if is_pass_cmd {
         if args.len() < 4 {
-            println!("❌ 錯誤：a -ep 參數不足。");
-            println!("💡 範例: a -ep 密碼 1.txt 2.txt 或 a -ep 密碼 --all");
+            println!("❌ 錯誤：參數不足。");
+            println!("💡 範例: a -p [密碼] [檔案] (例: a -p MyPass123 1.txt)");
             return;
         }
         pass_opt = Some(args[2].clone());
         for arg in args.iter().skip(3) {
-            if arg == "-s" || arg == "-u" || arg == "--sync" || arg == "--upload" {
+            if arg == "-s" || arg == "-u" {
                 upload = true;
-            } else if arg == "--all" || arg == "-a" {
-                // handled by is_all
             } else if !arg.starts_with('-') {
                 file_paths.push(arg.clone());
             }
@@ -2310,236 +2294,155 @@ fn main() {
         .iter()
         .any(|arg| arg == "-v" || arg == "-vv" || arg == "--verbose");
 
-    // ✨ 0. Web 網頁端管理引擎 (-w / --web / web)
-    let has_web = args.iter().any(|a| a == "-w" || a == "--web" || a == "web");
-    if has_web {
-        let sub_action = args
-            .iter()
-            .skip(1)
-            .find(|&a| !a.starts_with("-"))
-            .map(|s| s.as_str());
+    // 🛡️ 守衛：-i 不可搭配任何其他參數（防誤觸）
+    let has_i = args.iter().skip(1).any(|a| {
+        a == "-i" || a == "--init" || (a.starts_with('-') && !a.starts_with("--") && a.contains('i'))
+    });
+    if has_i {
+        if args.len() == 2 && args[1] == "-i" {
+            run_init_wizard();
+            return;
+        } else {
+            println!("❌ 錯誤：-i（系統重新配置）不可與任何其他參數搭配使用！");
+            println!("💡 為防止誤觸，請單獨輸入: a -i");
+            return;
+        }
+    }
+
+    // 🌟 偵測標準輸入是否有「管道（Pipe）」串流注入資料 (如 cat file | a)
+    let mut piped_input = String::new();
+    let has_pipe = if io::stdin().is_terminal() {
+        false
+    } else {
+        use std::os::unix::io::AsRawFd;
+        let fd = io::stdin().as_raw_fd();
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
+        if ret > 0 && (pfd.revents & libc::POLLIN) != 0 {
+            io::stdin().read_to_string(&mut piped_input).is_ok() && !piped_input.trim().is_empty()
+        } else {
+            false
+        }
+    };
+
+    // ✨ 無參數且無管道輸入：展示系統狀態儀表板與簡潔命令規範
+    if args.len() < 2 && !has_pipe {
+        if !GameConfig::is_configured() && io::stdin().is_terminal() {
+            println!("👋 檢測到系統尚未完成金鑰鎖定，正在啟動引導精靈...");
+            run_init_wizard();
+            return;
+        }
+
+        let current_key =
+            GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置 (嚴格鎖定 GPG)".to_string());
+        let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
+        let secrets_dir = GameConfig::get_secrets_dir();
+        let ledger = a::ledger::load_ledger();
+
+        println!("┌────────────────────────────────────────────────────────────┐");
+        println!("│ 🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態            │");
+        println!("├────────────────────────────────────────────────────────────┤");
+        println!("│ 📂 存儲目錄 : {:<44} │", note_dir.to_str().unwrap_or(""));
+        println!("│ 🔒 隱私隔離 : {:<44} │", secrets_dir.join("token.gpg").to_str().unwrap_or(""));
+        println!("│ 🔑 GPG 金鑰 : {:<44} │", current_key);
+        println!("│ 🌐 Gist ID  : {:<44} │", current_gist);
+        println!(
+            "│ 📜 金鑰歸檔 : {:<44} │",
+            format!("已收錄 {} 筆加密檔案審計記錄", ledger.records.len())
+        );
+        println!(
+            "│ ⚡ 架構核心 : {:<44} │",
+            "Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎"
+        );
+        println!("└────────────────────────────────────────────────────────────┘");
+        println!("用法: a [內容]                     # 追加寫入並整檔 GPG 鎖定公鑰加密");
+        println!("      cat 檔案 | a                 #【管道串流】直接吸納字串流加密追加");
+        println!("      a -e [文件名]                # 強制加密模式");
+        println!("      a -p [密碼] [檔案]           # 對稱 S2K 密碼防窮舉加密");
+        println!("      a -x [文件名]                # 解密一層加密封裝 (去 .gpg)");
+        println!("      a -n [文件名] [文件內容]     # 創建新文件 在雲端/本地");
+        println!("      a -m [文件名] [新文件名]     # 重命名");
+        println!("      a -f [文件名]                # 刪除檔案/遠端檔案");
+        println!("      a -t [標籤] [密鑰]           # 新增 TOTP 註冊驗證密鑰");
+        println!("        -t                         # 打印所有 TOTP 標籤");
+        println!("        -t [標籤]                  # 列印 6 位動態碼");
+        println!("      a -k                         # 金鑰審計清單");
+        println!("      a -a                         # 解密並列印今年度機密文檔");
+        println!("        -aes                       # 加密推送年度機密檔案");
+        println!("        -aus                       # 明文推送年度機密檔案");
+        println!("      a -s [文件名]                # 推送");
+        println!("      a -u                         # 強制明文模式");
+        println!("      a -l                         # 檢索雲端 Gist 倉庫全部檔案清單");
+        println!("      a -d [文件名]                # 下載");
+        println!("      a -o [目標路徑或./]          # 指定檔名/本地操作");
+        println!("      a -r1 或 a -r 1              # 刪除【倒數第 1 行】");
+        println!("      a -r1-100 或 a -r 1-100      # 刪除【倒數 1 至 100 行】");
+        println!("      a -r [關鍵字]                # 刪除包含該關鍵字的所有行");
+        println!("      a -w                         #【網頁管理引擎】啟動 Web 視覺化前台伺服器 (Ctrl+C 停止)");
+        println!("      a -b                         # 操作全部");
+        println!("        -bs                        # 推送本地檔案目錄全部文件，覆蓋遠端 Gist 倉庫");
+        println!("        -bd                        # 拉取遠端 Gist 全部文件，覆蓋本地檔案目錄");
+        println!("      a -i                         # 系統重新配置 /金鑰/Gist ID/檔案目錄/Token (不可參數搭配)");
+        return;
+    }
+
+    // 檢查已廢除的長參數提示
+    for arg in args.iter().skip(1) {
+        if arg == "--web" {
+            // 兼容舊習慣：自動無縫轉為短指令 -w，絕不報錯
+            continue;
+        }
+        if arg.starts_with("--") && arg != "--verbose" {
+            println!("⚠️ 警告：長參數「{}」已廢除！", arg);
+            println!("💡 請使用短參數組合，請參閱: a");
+            return;
+        }
+    }
+
+    // 解析所有出現的 short flags 字符
+    let mut flags_set = std::collections::HashSet::new();
+    for arg in args.iter().skip(1) {
+        if arg == "--web" {
+            flags_set.insert('w');
+        } else if arg.starts_with('-') && !arg.starts_with("--") {
+            // 排除 -r1, -r1-100 這類直接帶數字的行刪除語法
+            if arg.starts_with("-r") && arg.len() > 2 && arg.chars().nth(2).map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                flags_set.insert('r');
+                continue;
+            }
+            for c in arg[1..].chars() {
+                flags_set.insert(c);
+            }
+        }
+    }
+
+    // 🌟 1. Web 網頁管理引擎：a -w (兼容 a --web)
+    if flags_set.contains(&'w') || args.iter().skip(1).any(|a| a == "--web") {
         let port_opt = args
             .iter()
             .skip(1)
             .find(|&a| a.chars().all(|c| c.is_ascii_digit()))
             .map(|s| s.as_str());
-        handle_web_command(sub_action, port_opt);
+        handle_web_command(port_opt);
         return;
     }
 
-    // ✨ 0.5 檔案詳情檢識：a --show <文件名>
-    let has_show = args.iter().any(|a| a == "--show");
-    if has_show {
-        handle_show_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 0.6 刪除遠端 Gist 檔案或倉庫：a --delete / a -delete / a -del / a --rm / a -rm / a --delete-repo
-    if args.len() > 1 && (args[1] == "--delete" || args[1] == "-delete" || args[1] == "-del" || args[1] == "--rm" || args[1] == "-rm" || args[1] == "--delete-repo") {
-        handle_delete_repo_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 0.7 雲端下載與對齊 (-d / --download / download)
-    if args.len() > 1 && (args[1] == "-d" || args[1] == "--download" || args[1] == "download") {
-        handle_download_command(&args, verbose);
-        return;
-    }
-
-    // 🌟 定義嚴格的短選項組合 (Short Flag Cluster) 判定，杜絕 -delete, -del, -dir 等單字型 Flag 誤判
-    let is_short_cluster = |arg: &str, target_char: char| -> bool {
-        if !arg.starts_with('-') || arg.starts_with("--") || arg.len() < 2 {
-            return false;
-        }
-        let s = &arg[1..];
-        let reserved = [
-            "delete", "del", "remove", "rm", "dir", "diff", "new", "init", "help",
-            "show", "sync", "list", "web", "totp", "export", "pass", "key", "keys", "all", "raw"
-        ];
-        if reserved.contains(&s) || s.len() > 3 {
-            return false;
-        }
-        s.chars().all(|c| "slaepxkvd".contains(c)) && s.contains(target_char)
-    };
-
-    // ✨ 1. 檔案加密：a -e, a -ep, a -se (支援 --pass, --id, -s 同步混搭)
-    let has_encrypt = args.iter().any(|a| a == "-e" || a == "-ep" || a == "-se" || a == "-es" || a == "--encrypt" || a == "encrypt" || is_short_cluster(a, 'e'));
-    if has_encrypt {
-        handle_encrypt_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 判斷是否要求雲端同步 (a -s / a --sync / sync) 或列出清單 (a -l / a --list / a -k)
-    let has_sync = args.iter().skip(1).any(|a| a == "-s" || a == "--sync" || a == "sync" || is_short_cluster(a, 's'));
-    let has_list = args.iter().skip(1).any(|a| a == "-l" || a == "--list" || a == "list" || a == "-k" || a == "--ledger" || a == "--keys" || a == "--key-ledger" || is_short_cluster(a, 'l'));
-
-    // 🌟 組合命令：a -l --sync / a -l -s / a -s -l / a --sync -l / a -sl / a -ls
-    // 取消原本 a -l --sync 同步列表動作，改為：先上傳年份 gpg 檔案 + 緊接著顯示檔案清單
-    if has_sync && has_list {
-        handle_sync_command(&args, verbose);
-        println!();
-        handle_list_and_ledger_command(verbose);
-        return;
-    }
-
-    // 🌟 單獨雲端同步 (-s / --sync)
-    if has_sync {
-        handle_sync_command(&args, verbose);
-        return;
-    }
-
-    // 🌟 單獨列出雲端清單與審計 (-l / --list / -k)
-    if has_list {
-        handle_list_and_ledger_command(verbose);
-        return;
-    }
-
-    if args.len() > 1 && (args[1] == "-p" || args[1] == "--protect" || args[1] == "protect") {
-        println!("❌ 錯誤：單獨使用 -p 已廢止。-p 現僅作為 --pass 的簡寫。");
-        println!("💡 若要加密檔案，請使用: a -e <檔案路徑>");
-        println!("💡 若要使用密碼加密，請使用: a -e --pass <密碼> <檔案> 或 a -ep <密碼> <檔案>");
-        return;
-    }
-
-    // ✨ 2. 檔案解密還原：a -x 或 a --decrypt
-    if args.len() > 1 && (args[1] == "-x" || args[1] == "--decrypt") {
-        handle_decrypt_command(&args);
-        return;
-    }
-
-    // ✨ 2.5 創建新 Gist 倉庫：a --new -n 倉庫名 -i 倉庫信息
-    if args.len() > 1 && (args[1] == "--new" || args[1] == "--new-repo" || args[1] == "--clean-slate" || args[1] == "--migrate-repo") {
-        handle_new_repo_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 2.52 刪除遠端 Gist 檔案或倉庫（保留向後相容）
-    if args.len() > 1 && (args[1] == "--delete" || args[1] == "-delete" || args[1] == "-del" || args[1] == "--rm" || args[1] == "-rm" || args[1] == "--delete-repo") {
-        handle_delete_repo_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 2.53 雙重認證 TOTP 管理與查詢：a -t / --totp
-    if args.len() > 1 && (args[1] == "-t" || args[1] == "--totp" || args[1] == "totp") {
-        handle_totp_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 2.6 遠端檔案在位套殼加密 (--remote-encrypt / --encapsulate-remote / a -p --remote)
-    if args.len() > 1
-        && (args[1] == "--remote-encrypt"
-            || args[1] == "--encapsulate-remote"
-            || (args[1] == "-p" && args.iter().any(|a| a == "--remote")))
-    {
-        handle_remote_encrypt_command(&args, verbose);
-        return;
-    }
-
-    // ✨ 2.7 刪除遠端 Gist 檔案 (--rm-remote / --delete-remote)
-    if args.len() > 1 && (args[1] == "--rm-remote" || args[1] == "--delete-remote") {
-        if args.len() < 3 {
-            println!("❌ 錯誤：請指定欲自遠端刪除之檔案名稱。範例: a --rm-remote config.dae");
-            return;
-        }
-        let target_file = &args[2];
-        let token = match get_github_token(verbose) {
-            Ok(t) => t,
-            Err(e) => {
-                println!("❌ 錯誤：{}", e);
-                return;
-            }
-        };
-        match delete_gist_file(target_file, &token, verbose) {
-            Ok(_) => paint_line(&format!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", target_file), TerminalColor::Normal),
-            Err(e) => println!("{}", e),
-        }
-        return;
-    }
-
-    // ✨ 4. 單獨修改目錄：a --set-dir [路徑]
-    if args.len() > 1 && (args[1] == "--set-dir" || args[1] == "-dir" || args[1] == "--dir") {
-        if args.len() < 3 {
-            println!("❌ 錯誤：請提供目標目錄路徑。範例: a --set-dir ~/MyNotes");
-            return;
-        }
-        let target_dir = &args[2];
-        match GameConfig::set_persistent_dir(target_dir) {
-            Ok(p) => println!("✨ 機密文檔存儲目錄已切換為: {:?}", p),
-            Err(e) => println!("❌ 切換目錄失敗: {}", e),
-        }
-        return;
-    }
-
-    // ✨ 5. 手動觸發系統配置精靈
-    if args.len() > 1 && (args[1] == "--init" || args[1] == "-i" || args[1] == "init") {
-        run_init_wizard();
-        return;
-    }
-
-    // ✨ 6. 查看文檔閱覽 (-a / --all)
-    if args.len() > 1 && (args[1] == "-a" || args[1] == "--all") {
-        if args.len() == 2 || (args.len() == 3 && verbose) {
-            if let Ok(raw_content) = read_note(default_file_str) {
-                print_content_colored(&raw_content);
-            } else {
-                println!("📂 本地尚未檢測到本年度機密文檔記錄。");
-            }
-        } else {
-            let target_input = args
-                .iter()
-                .skip(2)
-                .find(|&a| a != "-v" && a != "-vv" && a != "--verbose")
-                .unwrap();
-
-            if target_input.starts_with("./")
-                || target_input.starts_with("../")
-                || target_input.starts_with("/")
-            {
-                let local_path = Path::new(target_input);
-                if let Ok(raw_content) = fs::read_to_string(local_path) {
-                    print_content_colored(&raw_content);
-                } else {
-                    println!("📂 本地找不到指定的檔案或為非純文字檔案：{}", target_input);
-                }
-            } else {
-                let remote_filename = if target_input.len() == 4
-                    && target_input.chars().all(|c| c.is_ascii_digit())
-                {
-                    format!("{}.note.gpg", target_input)
-                } else {
-                    target_input.clone()
-                };
-
-                match get_github_token(verbose) {
-                    Ok(token) => {
-                        println!(
-                            "☁️  [雲端同步] 正在從 Gist 獲取【{}】...",
-                            remote_filename
-                        );
-                        match fetch_from_gist(&remote_filename, &token, verbose) {
-                            Ok(remote_content) => {
-                                print_content_colored(&remote_content);
-                            }
-                            Err(e) => println!("⚠️ 雲端獲取失敗: {}", e),
-                        }
-                    }
-                    Err(e) => println!("❌ 錯誤：{}", e),
-                }
-            }
-        }
-        return;
-    }
-
-    // ✨ 10. 刪除特定行數或關鍵字 (-r)
-    if args.len() > 1 && (args[1].starts_with("-r") || args[1] == "--remove") {
-        let target_expr = if args[1] == "-r" || args[1] == "--remove" {
+    // 🌟 2. 行級過濾刪除：a -r1 / a -r 1 / a -r1-100 / a -r 1-100 / a -r [關鍵字]
+    let has_remove_line = args.iter().skip(1).any(|a| a.starts_with("-r"));
+    if has_remove_line {
+        let target_expr = if args.len() > 1 && args[1] == "-r" {
             if args.len() < 3 {
                 println!("❌ 錯誤：請提供欲刪除的行號或關鍵字。");
                 return;
             }
             args[2].clone()
         } else {
-            args[1][2..].to_string()
+            let r_arg = args.iter().skip(1).find(|a| a.starts_with("-r")).unwrap();
+            r_arg[2..].to_string()
         };
 
         let encrypted_old = match read_note(default_file_str) {
@@ -2680,151 +2583,241 @@ fn main() {
         return;
     }
 
-    // 🌟 偵測標準輸入是否有「管道（Pipe）」串流注入資料 (如 cat file | a)
-    let mut piped_input = String::new();
-    let has_pipe = if io::stdin().is_terminal() {
-        false
-    } else {
-        use std::os::unix::io::AsRawFd;
-        let fd = io::stdin().as_raw_fd();
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
-        if ret > 0 && (pfd.revents & libc::POLLIN) != 0 {
-            io::stdin().read_to_string(&mut piped_input).is_ok() && !piped_input.trim().is_empty()
-        } else {
-            false
-        }
-    };
-
-    // ✨ 11. 無參數且無管道輸入：展示系統狀態儀表板
-    if args.len() < 2 && !has_pipe {
-        if !GameConfig::is_configured() && io::stdin().is_terminal() {
-            println!("👋 檢測到系統尚未完成金鑰鎖定，正在啟動引導精靈...");
-            run_init_wizard();
-            return;
-        }
-
-        let current_key =
-            GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置 (嚴格鎖定 GPG)".to_string());
-        let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
-        let secrets_dir = GameConfig::get_secrets_dir();
-        let ledger = a::ledger::load_ledger();
-
-        println!("┌────────────────────────────────────────────────────────────┐");
-        println!("│ 🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態            │");
-        println!("├────────────────────────────────────────────────────────────┤");
-        println!("│ 📂 存儲目錄 : {:<44} │", note_dir.to_str().unwrap_or(""));
-        println!("│ 🔒 隱私隔離 : {:<44} │", secrets_dir.join("token.gpg").to_str().unwrap_or(""));
-        println!("│ 🔑 GPG 金鑰 : {:<44} │", current_key);
-        println!("│ 🌐 Gist ID  : {:<44} │", current_gist);
-        println!(
-            "│ 📜 金鑰歸檔 : {:<44} │",
-            format!("已收錄 {} 筆加密檔案審計記錄", ledger.records.len())
-        );
-        println!(
-            "│ ⚡ 架構核心 : {:<44} │",
-            "Rust 原生核心 (鎖定 GPG) + JS 網頁管理引擎"
-        );
-        println!("└────────────────────────────────────────────────────────────┘");
-        println!("用法: a [機密筆記內容/支援多行]   #追加寫入並整檔 GPG 鎖定公鑰加密");
-        println!("      cat 檔案 | a                 #【管道串流】直接吸納字串流加密追加");
-        println!("      a -e [檔案路徑]              #【檔案加密】使用預設 GPG 公鑰加密 (本地落盤)");
-        println!("      a -e --pass [密碼] [檔案]    #【對稱加固】S2K 密碼防窮舉加密");
-        println!("      a -e -s [檔案路徑]           #【加密同步】加密並上傳至雲端 Gist");
-        println!("      a -x [檔案路徑]              #【解密還原】還原一層加密封裝 (去 .gpg)");
-        println!("      a --new [文件名] [文件內容]     #【創建新文件】在雲端 Gist 創建/寫入新檔案");
-        println!("      a --delete [文件名]           #【刪除檔案】指定刪除遠端 Gist 倉庫中的檔案");
-        println!("      a -t 或 a -t [標籤]            #【TOTP 雙重認證】列出或輸出指定驗證碼");
-        println!("      a -t --add [標籤] --code [密鑰] #【新增 TOTP】註冊驗證密鑰");
-        println!("      a -t --delete [標籤]           #【刪除 TOTP】移除指定標籤驗證密鑰");
-        println!("      a -k 或 a --ledger           #【金鑰歸檔簿】查看檔案與金鑰審計清單");
-        println!("      a -a 或 a --all              #解密並列印今年度主機密文檔");
-        println!("      a -a ./[檔案]                #解密並列印【本地密文檔案】");
-        println!("      a -a [年份/檔名]             #即時檢索並列印雲端 Gist 文檔");
-        println!("      a -s 或 a --sync             #推送今年密文文檔至雲端 Gist (-v 檢視細節)");
-        println!("      a -s [檔案路徑]              #加密推送外部檔案至 Gist");
-        println!("      a -s -u [檔案路徑]           #以明文模式推送純文字檔案至 Gist");
-        println!("      a -l 或 a --list             #檢索雲端 Gist 倉庫全部檔案清單");
-        println!("      a -d --all                   #【批量下載】下載雲端 Gist 倉庫全部檔案至本地");
-        println!("      a -d [檔名] -o [目標路徑]     #【自訂下載】指定檔名/自訂路徑 (例: a -d 1.txt -o ./1.txt)");
-        println!("      a -d --all -o [目標目錄]      #下載全部檔案至自訂本地目錄 (例: a -d --all -o ./)");
-        println!("      a -d [年份/檔名]             #下載雲端密文包裹至本地 (保留 .gpg)");
-        println!("      a -d [檔名] -x               #下載並解密還原原始檔案 (去 .gpg)");
-        println!("      a -r1 或 a -r 1              #刪除【倒數第 1 行】");
-        println!("      a -r1-100 或 a -r 1-100      #刪除【倒數 1 至 100 行】");
-        println!("      a -r [關鍵字]                 #刪除包含該關鍵字的所有行");
-        println!("      a -w 或 a --web              #【網頁管理引擎】啟動 Web 視覺化管理後台");
-        println!("      a -w stop                    #關閉 Web 網頁管理引擎 (切換至待機狀態)");
-        println!("      a -w status                  #查詢 Web 網頁管理引擎運行狀態");
-        println!("      a --set-dir [新路徑]          #修改機密文檔本地存儲目錄");
-        println!("      a --init 或 a -i             #系統配置精靈 (支援 Enter 保留舊值)");
+    // 🌟 3. 重命名：a -m [文件名] [新文件名]
+    if flags_set.contains(&'m') {
+        handle_rename_command(&args, verbose);
         return;
     }
 
-    // ✨ 12. 寫入新筆記（命令列參數與管道文字流）
-    let new_note = if has_pipe {
-        if args.len() > 1 {
-            format!("{}\n{}", args[1..].join(" "), piped_input.trim_end())
-        } else {
-            piped_input.trim_end().to_string()
-        }
-    } else {
-        args[1..].join(" ")
-    };
+    // 🌟 4. 刪除檔案/遠端檔案：a -f [文件名]
+    if flags_set.contains(&'f') && !flags_set.contains(&'t') {
+        handle_delete_repo_command(&args, verbose);
+        return;
+    }
 
-    let mut existing_content = String::new();
-    if let Ok(encrypted_old) = read_note(default_file_str) {
-        if let Ok(decrypted_old) = decrypt_with_gpg(&encrypted_old) {
-            existing_content = decrypted_old;
+    // 🌟 5. 創建新文件：a -n [文件名] [文件內容]
+    if flags_set.contains(&'n') {
+        handle_new_repo_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 6. TOTP 雙重認證：a -t / a -t [標籤] / a -t [標籤] [密鑰]
+    if flags_set.contains(&'t') {
+        handle_totp_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 7. 操作全部：a -b / a -bs / a -bd
+    if flags_set.contains(&'b') {
+        let has_s = flags_set.contains(&'s');
+        let has_d = flags_set.contains(&'d');
+
+        if has_s {
+            println!("🚀 [操作全部] 正在推送本地檔案目錄全部文件，覆蓋遠端 Gist 倉庫...");
+            let mut sync_args = vec!["a".to_string(), "-s".to_string(), "-b".to_string()];
+            if flags_set.contains(&'u') {
+                sync_args.push("-u".to_string());
+            }
+            handle_sync_command(&sync_args, verbose);
+            return;
+        } else if has_d {
+            println!("🚀 [操作全部] 正在拉取遠端 Gist 全部文件，覆蓋本地檔案目錄...");
+            let mut dl_args = vec!["a".to_string(), "-d".to_string(), "-b".to_string()];
+            if flags_set.contains(&'x') {
+                dl_args.push("-x".to_string());
+            }
+            handle_download_command(&dl_args, verbose);
+            return;
         } else {
-            println!("⚠️  [解密異常] 無法解密舊文檔內容，終止操作以維護數據安全。");
+            println!("🛡️ Cyber-NOte 全部檔案批次操作 (-b):");
+            println!("  a -bs    推送本地檔案目錄全部文件，覆蓋遠端 Gist 倉庫");
+            println!("  a -bd    拉取遠端 Gist 全部文件，覆蓋本地檔案目錄");
             return;
         }
     }
 
-    if !existing_content.is_empty() && !existing_content.ends_with('\n') {
-        existing_content.push('\n');
-    }
-    existing_content.push_str(&new_note);
-
-    let gpg_user_id = match GameConfig::get_gpg_user_id() {
-        Ok(id) => id,
-        Err(e) => {
-            println!("❌ {}", e);
+    // 🌟 8. 年度機密檔案：a -a / a -aes / a -aus
+    if flags_set.contains(&'a') {
+        if flags_set.contains(&'s') {
+            if flags_set.contains(&'u') {
+                println!("🚀 [年度機密檔案] 以明文模式推送至遠端 Gist 倉庫...");
+                let mut sync_args = vec!["a".to_string(), "-s".to_string(), "-u".to_string()];
+                handle_sync_command(&sync_args, verbose);
+            } else {
+                println!("🚀 [年度機密檔案] 以加密模式推送至遠端 Gist 倉庫...");
+                let mut sync_args = vec!["a".to_string(), "-s".to_string()];
+                handle_sync_command(&sync_args, verbose);
+            }
             return;
-        }
-    };
-
-    match encrypt_with_gpg(existing_content.as_bytes(), &gpg_user_id) {
-        Ok(new_encrypted_block) => {
-            if write_encrypted_note(default_file_str, &new_encrypted_block).is_ok() {
-                let _ = record_ledger_entry(
-                    &format!("{}.note.gpg", current_year),
-                    default_file_str,
-                    &gpg_user_id,
-                    "GPG_PUBLIC_KEY",
-                    0,
-                    1,
-                    new_encrypted_block.as_bytes(),
-                    "年度主機密文檔追加寫入",
-                );
-                if has_pipe {
-                    println!(
-                        "✨ 管道串流資料已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔！",
-                        current_year
-                    );
+        } else {
+            // 解密並列印今年度機密文檔 (或指定路徑)
+            if args.len() == 2 || (args.len() == 3 && verbose) {
+                if let Ok(raw_content) = read_note(default_file_str) {
+                    print_content_colored(&raw_content);
                 } else {
-                    println!(
-                        "✨ 機密筆記已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔！",
-                        current_year
-                    );
+                    println!("📂 本地尚未檢測到本年度機密文檔記錄。");
+                }
+            } else {
+                let target_input = args
+                    .iter()
+                    .skip(2)
+                    .find(|&a| a != "-v" && a != "-vv" && a != "--verbose")
+                    .unwrap_or(&args[1]);
+
+                if target_input.starts_with("./")
+                    || target_input.starts_with("../")
+                    || target_input.starts_with("/")
+                {
+                    let local_path = Path::new(target_input);
+                    if let Ok(raw_content) = fs::read_to_string(local_path) {
+                        print_content_colored(&raw_content);
+                    } else {
+                        println!("📂 本地找不到指定的檔案或為非純文字檔案：{}", target_input);
+                    }
+                } else {
+                    let remote_filename = if target_input.len() == 4
+                        && target_input.chars().all(|c| c.is_ascii_digit())
+                    {
+                        format!("{}.note.gpg", target_input)
+                    } else {
+                        target_input.clone()
+                    };
+
+                    match get_github_token(verbose) {
+                        Ok(token) => {
+                            println!(
+                                "☁️  [雲端同步] 正在從 Gist 獲取【{}】...",
+                                remote_filename
+                            );
+                            match fetch_from_gist(&remote_filename, &token, verbose) {
+                                Ok(remote_content) => {
+                                    print_content_colored(&remote_content);
+                                }
+                                Err(e) => println!("⚠️ 雲端獲取失敗: {}", e),
+                            }
+                        }
+                        Err(e) => println!("❌ 錯誤：{}", e),
+                    }
                 }
             }
+            return;
         }
-        Err(e) => println!("⚠️ GPG 鎖定公鑰加密失敗: {}", e),
     }
+
+    // 🌟 9. 對稱 S2K 密碼防窮舉加密：a -p [密碼] [檔案]
+    if flags_set.contains(&'p') {
+        handle_encrypt_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 10. 強制加密模式：a -e [文件名]
+    if flags_set.contains(&'e') {
+        handle_encrypt_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 11. 下載：a -d [文件名] (支援 -o 與 -x)
+    if flags_set.contains(&'d') {
+        handle_download_command(&args, verbose);
+        return;
+    }
+
+    // 🌟 12. 解密一層加密封裝：a -x [文件名]
+    if flags_set.contains(&'x') {
+        handle_decrypt_command(&args);
+        return;
+    }
+
+    // 🌟 13. 金鑰審計清單：a -k
+    if flags_set.contains(&'k') {
+        a::ledger::print_ledger_table();
+        return;
+    }
+
+    // 🌟 14. 雲端推送與檢索清單：a -s / a -l / a -sl
+    let has_s = flags_set.contains(&'s');
+    let has_l = flags_set.contains(&'l');
+    if has_s && has_l {
+        handle_sync_command(&args, verbose);
+        println!();
+        handle_list_and_ledger_command(verbose);
+        return;
+    }
+    if has_s {
+        handle_sync_command(&args, verbose);
+        return;
+    }
+    if has_l {
+        handle_list_and_ledger_command(verbose);
+        return;
+    }
+
+    // ✨ 15. 若第一個參數不是以 - 開頭，且無相應短旗標，則視為寫入新筆記內容
+    if !args[1].starts_with('-') || has_pipe {
+        let new_note = if has_pipe {
+            if args.len() > 1 && !args[1].starts_with('-') {
+                format!("{}\n{}", args[1..].join(" "), piped_input.trim_end())
+            } else {
+                piped_input.trim_end().to_string()
+            }
+        } else {
+            args[1..].join(" ")
+        };
+
+        let mut existing_content = String::new();
+        if let Ok(encrypted_old) = read_note(default_file_str) {
+            if let Ok(decrypted_old) = decrypt_with_gpg(&encrypted_old) {
+                existing_content = decrypted_old;
+            } else {
+                println!("⚠️  [解密異常] 無法解密舊文檔內容，終止操作以維護數據安全。");
+                return;
+            }
+        }
+
+        if !existing_content.is_empty() && !existing_content.ends_with('\n') {
+            existing_content.push('\n');
+        }
+        existing_content.push_str(&new_note);
+
+        let gpg_user_id = match GameConfig::get_gpg_user_id() {
+            Ok(id) => id,
+            Err(e) => {
+                println!("❌ {}", e);
+                return;
+            }
+        };
+
+        match encrypt_with_gpg(existing_content.as_bytes(), &gpg_user_id) {
+            Ok(new_encrypted_block) => {
+                if write_encrypted_note(default_file_str, &new_encrypted_block).is_ok() {
+                    let _ = record_ledger_entry(
+                        &format!("{}.note.gpg", current_year),
+                        default_file_str,
+                        &gpg_user_id,
+                        "GPG_PUBLIC_KEY",
+                        0,
+                        1,
+                        new_encrypted_block.as_bytes(),
+                        "年度主機密文檔追加寫入",
+                    );
+                    if has_pipe {
+                        println!(
+                            "✨ 管道串流資料已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔！",
+                            current_year
+                        );
+                    } else {
+                        println!(
+                            "✨ 機密筆記已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔！",
+                            current_year
+                        );
+                    }
+                }
+            }
+            Err(e) => println!("⚠️ GPG 鎖定公鑰加密失敗: {}", e),
+        }
+        return;
+    }
+
+    println!("❌ 未知參數: {}", args[1]);
+    println!("💡 請輸入 'a' 檢視標準用法說明。");
 }

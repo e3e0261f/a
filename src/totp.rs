@@ -107,133 +107,103 @@ pub fn generate_totp(secret_base32: &str) -> Result<(String, u64), String> {
 pub fn handle_totp_command(args: &[String], _verbose: bool) {
     let mut secrets = load_totp_secrets();
 
-    let mut i = 2;
-    while i < args.len() {
-        let arg = &args[i];
-        if arg == "--add" || arg == "-a" {
-            let mut label = String::new();
-            let mut secret = String::new();
+    // 收集非旗標的位置參數
+    let non_flags: Vec<String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).cloned().collect();
 
-            let mut j = i + 1;
-            while j < args.len() {
-                let sub = &args[j];
-                if sub == "--name" || sub == "-n" {
-                    if j + 1 < args.len() {
-                        label = args[j + 1].clone();
-                        j += 2;
-                        continue;
-                    }
-                } else if sub == "--code" || sub == "-c" {
-                    if j + 1 < args.len() {
-                        secret = args[j + 1].clone();
-                        j += 2;
-                        continue;
-                    }
-                } else if !sub.starts_with('-') {
-                    if label.is_empty() {
-                        label = sub.clone();
-                    } else if secret.is_empty() {
-                        secret = sub.clone();
-                    }
-                }
-                j += 1;
-            }
+    // 檢查是否有刪除旗標 (-f, -d, --delete)
+    let is_delete = args.iter().any(|a| a == "-f" || a == "-d" || a == "--delete" || a == "--rm");
 
-            if label.is_empty() {
-                println!("❌ 錯誤：請指定標籤名稱 (label)。範例: a -t --add google --code \"...\" 或 a -t --add --name google --code \"...\"");
-                return;
-            }
-
-            if secret.is_empty() {
-                println!("❌ 錯誤：請提供 TOTP 密鑰碼。範例: a -t --add google --code \"oufb d3w6...\"");
-                return;
-            }
-
-            match generate_totp(&secret) {
-                Ok(_) => {
-                    secrets.insert(label.clone(), secret);
-                    match save_totp_secrets(&secrets) {
-                        Ok(_) => {
-                            println!("✨ 成功新增/更新 TOTP 標籤: [{}] (已加密儲存於本地筆記目錄，可透過 a -s 同步至雲端)", label);
-                        }
-                        Err(e) => {
-                            println!("❌ 儲存 TOTP 密鑰失敗: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("❌ 無效的 TOTP Base32 密鑰: {}", e);
-                }
-            }
-            return;
-        } else if arg == "--delete" || arg == "--rm" || arg == "-d" {
-            if i + 1 >= args.len() {
-                println!("❌ 錯誤：請指定欲刪除的標籤名稱或編號。範例: a -t --delete google");
-                return;
-            }
-            let target = &args[i + 1];
-            let mut keys: Vec<String> = secrets.keys().cloned().collect();
-            keys.sort();
-
-            let mut label_to_remove = target.clone();
-            if let Ok(idx) = target.parse::<usize>() {
-                if idx > 0 && idx <= keys.len() {
-                    label_to_remove = keys[idx - 1].clone();
-                }
-            }
-
-            if secrets.remove(&label_to_remove).is_some() {
-                match save_totp_secrets(&secrets) {
-                    Ok(_) => {
-                        println!("🗑️ 已成功刪除 TOTP 標籤: [{}] (已同步更新加密存盤)", label_to_remove);
-                    }
-                    Err(e) => {
-                        println!("❌ 儲存失敗: {}", e);
-                    }
-                }
-            } else {
-                println!("⚠️ 找不到標籤或編號 [{}]", target);
-            }
-            return;
-        } else if arg == "--list" || arg == "-l" {
-            print_totp_index_list(&secrets);
-            return;
-        } else if !arg.starts_with('-') {
-            // Lookup by index or label
-            let mut keys: Vec<String> = secrets.keys().cloned().collect();
-            keys.sort();
-
-            let mut matched_label = arg.clone();
-            if let Ok(idx) = arg.parse::<usize>() {
-                if idx > 0 && idx <= keys.len() {
-                    matched_label = keys[idx - 1].clone();
-                }
-            }
-
-            if let Some(secret) = secrets.get(&matched_label) {
-                match generate_totp(secret) {
-                    Ok((code, remaining)) => {
-                        println!("🔑 [{}] 驗證碼: {} (有效剩餘: {}s)", matched_label, code, remaining);
-                    }
-                    Err(e) => {
-                        println!("❌ 計算 [{}] 驗證碼失敗: {}", matched_label, e);
-                    }
-                }
-            } else {
-                println!("❌ 找不到標籤或編號 [{}]。請先使用 a -t --list 查看可用項目。", arg);
-            }
+    if is_delete {
+        if non_flags.is_empty() {
+            println!("❌ 錯誤：請指定欲刪除的標籤名稱或編號。範例: a -t -f google");
             return;
         }
-        i += 1;
+        let target = &non_flags[0];
+        let mut keys: Vec<String> = secrets.keys().cloned().collect();
+        keys.sort();
+
+        let mut label_to_remove = target.clone();
+        if let Ok(idx) = target.parse::<usize>() {
+            if idx > 0 && idx <= keys.len() {
+                label_to_remove = keys[idx - 1].clone();
+            }
+        }
+
+        if secrets.remove(&label_to_remove).is_some() {
+            match save_totp_secrets(&secrets) {
+                Ok(_) => {
+                    println!("🗑️ 已成功刪除 TOTP 標籤: [{}] (已同步更新加密存盤)", label_to_remove);
+                }
+                Err(e) => {
+                    println!("❌ 儲存失敗: {}", e);
+                }
+            }
+        } else {
+            println!("⚠️ 找不到標籤或編號 [{}]", target);
+        }
+        return;
     }
 
+    // 1. a -t [標籤] [密鑰] -> 新增 TOTP 註冊驗證密鑰
+    if non_flags.len() >= 2 {
+        let label = non_flags[0].clone();
+        let secret = non_flags[1..].join("");
+
+        match generate_totp(&secret) {
+            Ok(_) => {
+                secrets.insert(label.clone(), secret);
+                match save_totp_secrets(&secrets) {
+                    Ok(_) => {
+                        println!("✨ 成功新增/註冊 TOTP 標籤: [{}] (已加密儲存於本地筆記目錄，可透過 a -s 同步至雲端)", label);
+                    }
+                    Err(e) => {
+                        println!("❌ 儲存 TOTP 密鑰失敗: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ 無效的 TOTP Base32 密鑰: {}", e);
+            }
+        }
+        return;
+    }
+
+    // 2. a -t [標籤] -> 列印 6 位動態碼
+    if non_flags.len() == 1 {
+        let arg = &non_flags[0];
+        let mut keys: Vec<String> = secrets.keys().cloned().collect();
+        keys.sort();
+
+        let mut matched_label = arg.clone();
+        if let Ok(idx) = arg.parse::<usize>() {
+            if idx > 0 && idx <= keys.len() {
+                matched_label = keys[idx - 1].clone();
+            }
+        }
+
+        if let Some(secret) = secrets.get(&matched_label) {
+            match generate_totp(secret) {
+                Ok((code, remaining)) => {
+                    println!("🔑 [{}] 驗證碼: {} (有效剩餘: {}s)", matched_label, code, remaining);
+                }
+                Err(e) => {
+                    println!("❌ 計算 [{}] 驗證碼失敗: {}", matched_label, e);
+                }
+            }
+        } else {
+            println!("❌ 找不到標籤或編號 [{}]。請先使用 a -t 查看可用標籤清單。", arg);
+        }
+        return;
+    }
+
+    // 3. a -t -> 打印所有 TOTP 標籤
     print_totp_index_list(&secrets);
 }
 
 fn print_totp_index_list(secrets: &HashMap<String, String>) {
     if secrets.is_empty() {
         println!("📂 目前尚未儲存任何 TOTP 驗證密鑰。");
-        println!("💡 新增範例: a -t --add google --code \"oufb d3w6 krma 7tcu dsaz cdis emey df5b\"");
+        println!("💡 新增範例: a -t google \"oufb d3w6 krma 7tcu dsaz cdis emey df5b\"");
         return;
     }
 
@@ -241,11 +211,11 @@ fn print_totp_index_list(secrets: &HashMap<String, String>) {
     keys.sort();
 
     println!("\n🛡️ Cyber-NOte TOTP 雙重認證項目列表:");
-    println!("------------------------------------------------------------");
+    println!("────────────────────────────────────────────────────────────");
     for (idx, label) in keys.iter().enumerate() {
-        println!("  [{}] {}", idx + 1, label);
+        println!("  [{:02}] {}", idx + 1, label);
     }
-    println!("------------------------------------------------------------");
-    println!("💡 取得驗證碼: 'a -t [編號或標籤]' (例: a -t 1 或 a -t google)");
-    println!("💡 新增密鑰:   'a -t --add [標籤] --code [密鑰]' 或 'a -t --add --name [標籤] --code [密鑰]'");
+    println!("────────────────────────────────────────────────────────────");
+    println!("💡 取得驗證碼: 'a -t [標籤]' (例: a -t google 或 a -t 1)");
+    println!("💡 新增密鑰:   'a -t [標籤] [密鑰]'");
 }

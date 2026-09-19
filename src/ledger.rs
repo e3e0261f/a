@@ -119,6 +119,23 @@ pub fn remove_ledger_entry(file_name: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn rename_ledger_entry(old_name: &str, new_name: &str) -> Result<(), String> {
+    let mut ledger = load_ledger();
+    let mut modified = false;
+    for record in &mut ledger.records {
+        if record.file_name == old_name {
+            record.file_name = new_name.to_string();
+            record.target_path = record.target_path.replace(old_name, new_name);
+            modified = true;
+        }
+    }
+    if modified {
+        ledger.updated_at = Local::now().to_rfc3339();
+        save_ledger(&ledger)?;
+    }
+    Ok(())
+}
+
 pub fn extract_key_id_from_gpg_file(path: &std::path::Path) -> String {
     if let Ok(output) = std::process::Command::new("gpg")
         .arg("--list-packets")

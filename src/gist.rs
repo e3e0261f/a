@@ -433,3 +433,41 @@ pub fn delete_gist_file(file_name: &str, token: &str, verbose: bool) -> Result<(
         Err(e) => Err(format!("❌ 發送刪除請求失敗: {}", e)),
     }
 }
+
+// 🏷️ 重命名 Gist 中的指定檔案
+pub fn rename_gist_file(old_name: &str, new_name: &str, token: &str, verbose: bool) -> Result<(), String> {
+    let client = build_client();
+    let url = GameConfig::get_gist_url()?;
+
+    if verbose {
+        println!("  🏷️  [網路] 正在向 {} 請求重命名檔案 {} -> {}...", url, old_name, new_name);
+    }
+
+    let mut inner = serde_json::Map::new();
+    inner.insert("filename".to_string(), Value::String(new_name.to_string()));
+    let mut files_obj = serde_json::Map::new();
+    files_obj.insert(old_name.to_string(), Value::Object(inner));
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("files".to_string(), Value::Object(files_obj));
+    let body = Value::Object(body_map);
+
+    let response = client.patch(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&body)
+        .send();
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            if status.is_success() {
+                Ok(())
+            } else {
+                let text = res.text().unwrap_or_default();
+                Err(format!("❌ 重命名雲端檔案失敗，狀態碼: {} (詳情: {})", status, text))
+            }
+        }
+        Err(e) => Err(format!("❌ 發送重命名請求失敗: {}", e)),
+    }
+}
