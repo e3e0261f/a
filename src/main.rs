@@ -737,9 +737,9 @@ fn handle_remote_encrypt_command(args: &[String], verbose: bool) {
     ) {
         Ok(_) => {
             println!("\n✨ 遠端套殼加密完成！");
-            paint_line(&format!("  🔒 遠端已發佈密文殼: {}", new_encrypted_name), TerminalColor::Green);
+            paint_line(&format!("  🔒 遠端已發佈密文殼: {}", new_encrypted_name), TerminalColor::Normal);
             if delete_original {
-                paint_line(&format!("  🗑️  遠端原明文檔案已徹底刪除: {}", target_file), TerminalColor::Cyan);
+                paint_line(&format!("  🗑️  遠端原明文檔案已徹底刪除: {}", target_file), TerminalColor::Gray);
             }
             println!("  🛡️  加密層級: 第 {} 層 | 金鑰/模式: {}", layer, cipher_mode);
             println!("  📂 本地安全副本已存入: {:?}", local_output_path);
@@ -1795,7 +1795,7 @@ fn main() {
             }
         };
         match delete_gist_file(target_file, &token, verbose) {
-            Ok(_) => paint_line(&format!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", target_file), TerminalColor::Green),
+            Ok(_) => paint_line(&format!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", target_file), TerminalColor::Normal),
             Err(e) => println!("{}", e),
         }
         return;
