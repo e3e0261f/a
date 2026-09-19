@@ -1745,7 +1745,7 @@ fn main() {
     }
 
     // ✨ 1. 檔案加密：a -e, a -ep, a -se (支援 --pass, --id, -s 同步混搭)
-    let has_encrypt = args.iter().any(|a| a == "-e" || a == "-ep" || a == "--encrypt" || a == "encrypt" || (a.starts_with('-') && a.contains('e')));
+    let has_encrypt = args.iter().any(|a| a == "-e" || a == "-ep" || a == "-se" || a == "-es" || a == "--encrypt" || a == "encrypt" || (a.starts_with('-') && !a.starts_with("--") && a.contains('e') && !a.contains('d') && !a.contains('n') && !a.contains('l')));
     if has_encrypt {
         handle_encrypt_command(&args, verbose);
         return;
