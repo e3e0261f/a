@@ -369,13 +369,10 @@ fn handle_new_repo_command(args: &[String], verbose: bool) {
     }
 }
 
-// 🗑️ 刪除 Gist 中的指定檔案：a --delete [文件名或編號]
+// 🗑️ 刪除 Gist 中的指定檔案（支援多參數批量與 --all）
 fn handle_delete_repo_command(args: &[String], verbose: bool) {
-    if args.len() < 3 {
-        println!("❌ 錯誤：請指定欲刪除的檔案名稱或編號。範例: a --delete 1 或 a --delete hello.txt");
-        return;
-    }
-    let target = &args[2];
+    let targets: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with('-') || *a == "--all" || *a == "-a").collect();
+    let is_all = args.iter().any(|a| a == "--all" || a == "-a");
 
     let token = match get_github_token(verbose) {
         Ok(t) => t,
@@ -390,19 +387,39 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
         Err(_) => Vec::new(),
     };
 
-    let mut filename_to_delete = target.clone();
-    if !files.contains(target) {
-        if let Ok(idx) = target.parse::<usize>() {
-            if idx > 0 && idx <= files.len() {
-                filename_to_delete = files[idx - 1].clone();
+    if is_all {
+        println!("🗑️ 正在準備批量刪除遠端 Gist 倉庫中的全部檔案 (共 {} 個)...", files.len());
+        for filename in &files {
+            println!("🗑️ 正在刪除: {}...", filename);
+            match delete_gist_file(filename, &token, verbose) {
+                Ok(_) => println!("🗑️ 已成功刪除: {}", filename),
+                Err(e) => println!("❌ 刪除失敗 ({}): {}", filename, e),
             }
         }
+        println!("✨ 全部遠端檔案刪除完畢！");
+        return;
     }
 
-    println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename_to_delete);
-    match delete_gist_file(&filename_to_delete, &token, verbose) {
-        Ok(_) => println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete),
-        Err(e) => println!("❌ 刪除遠端檔案失敗: {}", e),
+    if targets.is_empty() {
+        println!("❌ 錯誤：請指定欲刪除的檔案名稱或編號。範例: a --delete 1 或 a --delete file1.txt file2.gpg");
+        return;
+    }
+
+    for target in targets {
+        let mut filename_to_delete = target.to_string();
+        if !files.contains(&filename_to_delete) {
+            if let Ok(idx) = target.parse::<usize>() {
+                if idx > 0 && idx <= files.len() {
+                    filename_to_delete = files[idx - 1].clone();
+                }
+            }
+        }
+
+        println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename_to_delete);
+        match delete_gist_file(&filename_to_delete, &token, verbose) {
+            Ok(_) => println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete),
+            Err(e) => println!("❌ 刪除遠端檔案失敗 ({}): {}", filename_to_delete, e),
+        }
     }
 }
 
@@ -1405,38 +1422,31 @@ fn get_embedded_dashboard_html() -> &'static str {
 }
 
 
-// 🛡️ 檔案加密：a -e, a -ep (支援普通文本、.gpg 巢狀多層加密、金鑰 ID 指定、密碼防窮舉加固與可選 -s 同步上傳)
+// 🛡️ 檔案加密（支援多參數批量與 --all）
 fn handle_encrypt_command(args: &[String], verbose: bool) {
-    if args.len() < 3 {
-        println!("❌ 錯誤：參數不足，目標動作不明確。");
-        println!("💡 正確用法範例:");
-        println!("   a -e <檔案路徑>            # 使用預設 GPG 公鑰加密 (本地落盤)");
-        println!("   a -e --pass <密碼> <檔案>  # 使用 S2K 對稱密碼加固加密");
-        println!("   a -ep <密碼> <檔案>        # 快速密碼加密 (a -e --pass 簡便寫法)");
-        println!("   a -e --id <key_id> <檔案>  # 指定非預設金鑰 ID 加密");
-        println!("   a -e -s <檔案路徑>         # 加密並同步上傳至雲端 Gist");
-        return;
-    }
-
-    let is_ep = args[1] == "-ep";
-    let mut file_path_opt: Option<&str> = None;
+    let is_ep = args.len() > 1 && args[1] == "-ep";
+    let is_all = args.iter().any(|a| a == "--all" || a == "-a");
+    let mut file_paths = Vec::new();
     let mut pass_opt: Option<String> = None;
     let mut key_id_opt: Option<String> = None;
     let mut iter_opt: Option<u64> = None;
     let mut upload = false;
-    let mut out_path_opt: Option<&str> = None;
+    let mut out_path_opt: Option<String> = None;
 
     if is_ep {
         if args.len() < 4 {
             println!("❌ 錯誤：a -ep 參數不足。");
-            println!("💡 範例: a -ep 密碼 1.txt");
+            println!("💡 範例: a -ep 密碼 1.txt 2.txt 或 a -ep 密碼 --all");
             return;
         }
         pass_opt = Some(args[2].clone());
-        file_path_opt = Some(&args[3]);
-        for arg in args.iter().skip(4) {
+        for arg in args.iter().skip(3) {
             if arg == "-s" || arg == "-u" || arg == "--sync" || arg == "--upload" {
                 upload = true;
+            } else if arg == "--all" || arg == "-a" {
+                // handled by is_all
+            } else if !arg.starts_with('-') {
+                file_paths.push(arg.clone());
             }
         }
     } else {
@@ -1466,166 +1476,159 @@ fn handle_encrypt_command(args: &[String], verbose: bool) {
                 }
             } else if arg == "--out" || arg == "-o" {
                 if i + 1 < args.len() {
-                    out_path_opt = Some(&args[i + 1]);
+                    out_path_opt = Some(args[i + 1].clone());
                     skip_next = true;
                 }
             } else if arg == "-u" || arg == "--upload" || arg == "-s" || arg == "--sync" {
                 upload = true;
-            } else if !arg.starts_with('-') && file_path_opt.is_none() {
-                file_path_opt = Some(arg);
+            } else if arg == "--all" || arg == "-a" {
+                // is_all = true
+            } else if !arg.starts_with('-') {
+                file_paths.push(arg.clone());
             }
         }
     }
 
-    let target_file = match file_path_opt {
-        Some(f) => f,
-        None => {
-            println!("❌ 錯誤：請指定欲加密的檔案路徑。");
-            println!("💡 範例: a -e 1.txt 或 a -e --pass 密碼 1.txt 或 a -ep 密碼 1.txt");
-            return;
-        }
-    };
-
-    let target_path = Path::new(target_file);
-    if !target_path.exists() {
-        println!("❌ 錯誤：指定檔案不存在 -> {}", target_file);
-        return;
-    }
-
-    let raw_bytes = match fs::read(target_path) {
-        Ok(b) => b,
-        Err(e) => {
-            println!("❌ 錯誤：無法讀取檔案內容: {}", e);
-            return;
-        }
-    };
-
-    let current_layer = calculate_gpg_layer(target_file);
-    let target_layer = current_layer + 1;
-
-    let default_out = format!("{}.gpg", target_file);
-    let out_file_path = out_path_opt.unwrap_or(&default_out);
-    let out_path_obj = Path::new(out_file_path);
-    let out_file_name = out_path_obj
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(out_file_path);
-
-    let default_key = GameConfig::get_gpg_user_id();
-    let active_key = key_id_opt.or(default_key.ok());
-    let s2k_count = iter_opt.unwrap_or(DEFAULT_S2K_COUNT);
-
-    let (ciphertext, cipher_mode, key_id_used, iterations_used) = if let Some(pass) = pass_opt {
-        println!(
-            "🔐 加密體系: GPG 對稱密碼加固 (S2K 模式 3 / {} 輪迭代運算，防窮舉破解)...",
-            s2k_count
-        );
-        match encrypt_symmetric_s2k(&raw_bytes, &pass, s2k_count) {
-            Ok(c) => (
-                c,
-                "GPG_SYMMETRIC_S2K".to_string(),
-                format!("SYMMETRIC-S2K ({} 輪)", s2k_count),
-                s2k_count,
-            ),
-            Err(e) => {
-                println!("❌ 加密失敗: {}", e);
-                return;
-            }
-        }
-    } else if let Some(gpg_key) = active_key {
-        println!("🔐 加密體系: GPG 公鑰加密 (Key ID: {})...", gpg_key);
-        match encrypt_with_gpg(&raw_bytes, &gpg_key) {
-            Ok(c) => (c, "GPG_PUBLIC_KEY".to_string(), gpg_key, 0),
-            Err(e) => {
-                println!("❌ 加密失敗: {}", e);
-                return;
-            }
-        }
-    } else {
-        println!("ℹ️  未配置或未指定 GPG 公鑰，啟用高強度對稱加密模式。");
-        print!("🔑 請設定防窮舉加密密碼 (預設 S2K 65,011,712 輪加固): ");
-        io::stdout().flush().unwrap();
-        let mut pass_input = String::new();
-        io::stdin().read_line(&mut pass_input).unwrap();
-        let pass = pass_input.trim().to_string();
-        if pass.is_empty() {
-            println!("❌ 錯誤：密碼不得為空。操作終止。");
-            return;
-        }
-        match encrypt_symmetric_s2k(&raw_bytes, &pass, s2k_count) {
-            Ok(c) => (
-                c,
-                "GPG_SYMMETRIC_S2K".to_string(),
-                format!("SYMMETRIC-S2K ({} 輪)", s2k_count),
-                s2k_count,
-            ),
-            Err(e) => {
-                println!("❌ 加密失敗: {}", e);
-                return;
-            }
-        }
-    };
-
-    if let Err(e) = fs::write(out_path_obj, ciphertext.as_bytes()) {
-        println!("❌ 寫入加密檔案失敗: {}", e);
-        return;
-    }
-
-    let notes = if target_layer > 1 {
-        format!("第 {} 層巢狀多重加密封裝", target_layer)
-    } else {
-        "單層獨立檔案加密封裝".to_string()
-    };
-
-    let _ = record_ledger_entry(
-        out_file_name,
-        out_file_path,
-        &key_id_used,
-        &cipher_mode,
-        iterations_used,
-        target_layer,
-        ciphertext.as_bytes(),
-        &notes,
-    );
-
-    let sha256 = compute_sha256(ciphertext.as_bytes());
-
-    let key_display = if cipher_mode == "GPG_SYMMETRIC_S2K" {
-        "GPG 對稱加密".to_string()
-    } else {
-        let short_id = if key_id_used.len() >= 8 {
-            &key_id_used[key_id_used.len() - 8..]
-        } else {
-            &key_id_used
-        };
-        format!("GPG 公鑰加密 (Key ID: {})", short_id)
-    };
-    println!("{}", key_display);
-    println!("密文大小 : {:.2} KB ({} Bytes)", ciphertext.len() as f64 / 1024.0, ciphertext.len());
-    println!("雜湊校驗 : SHA-256: {}", &sha256[..32]);
-
-    // 若指定 -s / --sync / -se 等，同步上傳至 Gist 雲端
-    if upload {
-        match get_github_token(verbose) {
-            Ok(token) => {
-                println!("☁️  [2/2 上傳] 正在將加密包裹安全推送至雲端 Gist【{}】...", out_file_name);
-                match sync_to_gist(&ciphertext, out_file_name, &token, verbose) {
-                    Ok(_) => println!("✅ [成功] 檔案已完成端到端加密並成功上傳至雲端！"),
-                    Err(e) => println!("❌ [失敗] 雲端上傳失敗: {}", e),
+    let note_dir = GameConfig::get_note_dir();
+    if is_all {
+        let _ = fs::create_dir_all(&note_dir);
+        if let Ok(entries) = fs::read_dir(&note_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.ends_with(".gpg") && !name.ends_with(".asc") && !name.starts_with('.') {
+                            file_paths.push(path.to_str().unwrap().to_string());
+                        }
+                    }
                 }
             }
-            Err(e) => println!("❌ 雲端憑證讀取失敗，略過上傳: {}", e),
         }
-    } else {
-        println!("💡 提示：未結合 -s 參數，僅在本地完成加密落盤。");
+    }
+
+    if file_paths.is_empty() {
+        println!("❌ 錯誤：請指定欲加密的檔案路徑或使用 --all。");
+        return;
+    }
+
+    for target_file in file_paths {
+        let target_path = Path::new(&target_file);
+        if !target_path.exists() {
+            println!("❌ 錯誤：指定檔案不存在 -> {}", target_file);
+            continue;
+        }
+
+        let raw_bytes = match fs::read(target_path) {
+            Ok(b) => b,
+            Err(e) => {
+                println!("❌ 錯誤：無法讀取檔案內容 ({}): {}", target_file, e);
+                continue;
+            }
+        };
+
+        let current_layer = calculate_gpg_layer(&target_file);
+        let target_layer = current_layer + 1;
+
+        let default_out = format!("{}.gpg", target_file);
+        let out_file_path_str = out_path_opt.clone().unwrap_or(default_out);
+        let out_path_obj = Path::new(&out_file_path_str);
+        let out_file_name = out_path_obj
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&out_file_path_str);
+
+        let default_key = GameConfig::get_gpg_user_id();
+        let active_key = key_id_opt.clone().or(default_key.ok());
+        let s2k_count = iter_opt.unwrap_or(DEFAULT_S2K_COUNT);
+
+        let (ciphertext, cipher_mode, key_id_used, _iterations_used) = if let Some(ref pass) = pass_opt {
+            match encrypt_symmetric_s2k(&raw_bytes, pass, s2k_count) {
+                Ok(c) => (
+                    c,
+                    "GPG_SYMMETRIC_S2K".to_string(),
+                    format!("SYMMETRIC-S2K ({} 輪)", s2k_count),
+                    s2k_count,
+                ),
+                Err(e) => {
+                    println!("❌ 加密失敗 ({}): {}", target_file, e);
+                    continue;
+                }
+            }
+        } else if let Some(ref gpg_key) = active_key {
+            match encrypt_with_gpg(&raw_bytes, gpg_key) {
+                Ok(c) => (c, "GPG_PUBLIC_KEY".to_string(), gpg_key.clone(), 0),
+                Err(e) => {
+                    println!("❌ 加密失敗 ({}): {}", target_file, e);
+                    continue;
+                }
+            }
+        } else {
+            match GameConfig::get_gpg_user_id() {
+                Ok(k) => match encrypt_with_gpg(&raw_bytes, &k) {
+                    Ok(c) => (c, "GPG_PUBLIC_KEY".to_string(), k, 0),
+                    Err(e) => {
+                        println!("❌ 加密失敗 ({}): {}", target_file, e);
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    println!("❌ 無法取得預設 GPG 金鑰: {}", e);
+                    continue;
+                }
+            }
+        };
+
+        if let Err(e) = fs::write(out_path_obj, ciphertext.as_bytes()) {
+            println!("❌ 寫入加密檔案失敗: {}", e);
+            continue;
+        }
+
+        let sha256 = compute_sha256(ciphertext.as_bytes());
+
+        let key_display = if cipher_mode == "GPG_SYMMETRIC_S2K" {
+            "GPG 對稱加密".to_string()
+        } else {
+            let short_id = if key_id_used.len() >= 8 {
+                &key_id_used[key_id_used.len() - 8..]
+            } else {
+                &key_id_used
+            };
+            format!("GPG 公鑰加密 (Key ID: {})", short_id)
+        };
+        println!("🛡️ 檔案 [{}] 加密成功：", target_file);
+        println!("{}", key_display);
+        println!("密文大小 : {:.2} KB ({} Bytes)", ciphertext.len() as f64 / 1024.0, ciphertext.len());
+        println!("雜湊校驗 : SHA-256: {}", &sha256[..32]);
+
+        let _ = record_ledger_entry(
+            out_file_name,
+            &out_file_path_str,
+            &key_id_used,
+            &cipher_mode,
+            if cipher_mode == "GPG_SYMMETRIC_S2K" { s2k_count } else { 0 },
+            target_layer,
+            ciphertext.as_bytes(),
+            &format!("批量/複合封裝第 {} 層", target_layer),
+        );
+
+        if upload {
+            match get_github_token(verbose) {
+                Ok(token) => {
+                    println!("☁️  正在將加密包裹推送至雲端 Gist【{}】...", out_file_name);
+                    let _ = sync_to_gist(&ciphertext, out_file_name, &token, verbose);
+                }
+                Err(_) => {}
+            }
+        }
     }
 }
 
-// 🔓 檔案解密還原一層 (支援巢狀剝離一層)
+// 🔓 檔案解密還原一層 (支援多參數批量與 --all)
 fn handle_decrypt_command(args: &[String]) {
-    let mut file_path_opt: Option<&str> = None;
-    let mut pass_opt: Option<&str> = None;
-    let mut out_path_opt: Option<&str> = None;
+    let mut file_paths = Vec::new();
+    let mut pass_opt: Option<String> = None;
+    let mut out_path_opt: Option<String> = None;
+    let is_all = args.iter().any(|a| a == "--all" || a == "-a");
 
     let mut skip_next = false;
     for (i, arg) in args.iter().enumerate() {
@@ -1638,68 +1641,86 @@ fn handle_decrypt_command(args: &[String]) {
         }
         if arg == "--pass" || arg == "-P" || arg == "--password" {
             if i + 1 < args.len() {
-                pass_opt = Some(&args[i + 1]);
+                pass_opt = Some(args[i + 1].clone());
                 skip_next = true;
             }
         } else if arg == "--out" || arg == "-o" {
             if i + 1 < args.len() {
-                out_path_opt = Some(&args[i + 1]);
+                out_path_opt = Some(args[i + 1].clone());
                 skip_next = true;
             }
-        } else if !arg.starts_with('-') && file_path_opt.is_none() {
-            file_path_opt = Some(arg);
+        } else if arg == "--all" || arg == "-a" {
+            // handled by is_all
+        } else if !arg.starts_with('-') {
+            file_paths.push(arg.clone());
         }
     }
 
-    let target_file = match file_path_opt {
-        Some(f) => f,
-        None => {
-            println!("❌ 錯誤：請提供欲解密檔案路徑。範例: a -x 1.gpg.gpg 或 a -x 1.txt.gpg");
-            return;
+    let note_dir = GameConfig::get_note_dir();
+    if is_all {
+        let _ = fs::create_dir_all(&note_dir);
+        if let Ok(entries) = fs::read_dir(&note_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.ends_with(".gpg") {
+                            file_paths.push(path.to_str().unwrap().to_string());
+                        }
+                    }
+                }
+            }
         }
-    };
+    }
 
-    let target_path = Path::new(target_file);
-    if !target_path.exists() {
-        println!("❌ 錯誤：指定檔案不存在 -> {}", target_file);
+    if file_paths.is_empty() {
+        println!("❌ 錯誤：請提供欲解密檔案路徑或使用 --all。範例: a -x 1.gpg 2.gpg 或 a -x --all");
         return;
     }
 
-    let encrypted_content = match fs::read_to_string(target_path) {
-        Ok(s) => s,
-        Err(e) => {
-            println!("❌ 讀取密文檔案失敗: {}", e);
-            return;
+    for target_file in file_paths {
+        let target_path = Path::new(&target_file);
+        if !target_path.exists() {
+            println!("❌ 錯誤：指定檔案不存在 -> {}", target_file);
+            continue;
         }
-    };
 
-    println!("🔓 正在解密還原【{}】...", target_file);
-    let decrypted_bytes = match decrypt_bytes_with_gpg(&encrypted_content, pass_opt) {
-        Ok(b) => b,
-        Err(e) => {
-            println!("❌ 解密失敗: {}", e);
-            println!("💡 若為對稱密碼加密檔案，請加上 --pass <密碼> 參數。");
-            return;
+        let encrypted_content = match fs::read_to_string(target_path) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("❌ 讀取密文檔案失敗 ({}): {}", target_file, e);
+                continue;
+            }
+        };
+
+        println!("🔓 正在解密還原【{}】...", target_file);
+        let decrypted_bytes = match decrypt_bytes_with_gpg(&encrypted_content, pass_opt.as_deref()) {
+            Ok(b) => b,
+            Err(e) => {
+                println!("❌ 解密失敗 ({}): {}", target_file, e);
+                println!("💡 若為對稱密碼加密檔案，請加上 --pass <密碼> 參數。");
+                continue;
+            }
+        };
+
+        let default_out = if target_file.ends_with(".gpg") {
+            target_file.strip_suffix(".gpg").unwrap().to_string()
+        } else {
+            format!("{}.decrypted", target_file)
+        };
+
+        let out_path = out_path_opt.clone().unwrap_or(default_out);
+        if let Err(e) = fs::write(&out_path, &decrypted_bytes) {
+            println!("❌ 寫入解密檔案失敗 ({}): {}", out_path, e);
+            continue;
         }
-    };
 
-    let default_out = if target_file.ends_with(".gpg") {
-        target_file.strip_suffix(".gpg").unwrap().to_string()
-    } else {
-        format!("{}.decrypted", target_file)
-    };
-
-    let out_path = out_path_opt.unwrap_or(&default_out);
-    if let Err(e) = fs::write(out_path, &decrypted_bytes) {
-        println!("❌ 寫入解密檔案失敗: {}", e);
-        return;
+        println!(
+            "✨ 解密成功！已還原至: {} (大小: {:.2} KB)",
+            out_path,
+            decrypted_bytes.len() as f64 / 1024.0
+        );
     }
-
-    println!(
-        "✨ 解密成功！已還原一層封裝至: {} (大小: {:.2} KB)",
-        out_path,
-        decrypted_bytes.len() as f64 / 1024.0
-    );
 }
 
 fn main() {
@@ -1770,8 +1791,8 @@ fn main() {
         return;
     }
 
-    // ✨ 2.52 刪除指定舊 Gist 倉庫：a --delete <gist_id>
-    if args.len() > 1 && (args[1] == "--delete" || args[1] == "--delete-repo") {
+    // ✨ 2.52 刪除遠端 Gist 檔案或倉庫：a --delete / a -delete / a -del / a --rm / a -rm
+    if args.len() > 1 && (args[1] == "--delete" || args[1] == "-delete" || args[1] == "-del" || args[1] == "--rm" || args[1] == "-rm" || args[1] == "--delete-repo") {
         handle_delete_repo_command(&args, verbose);
         return;
     }
