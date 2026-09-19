@@ -1,4 +1,5 @@
 // src/color.rs
+#[derive(Clone, Copy)]
 pub enum TerminalColor {
     Green,
     Cyan,

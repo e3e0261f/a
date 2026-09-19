@@ -15,10 +15,10 @@ use a::encrypt::{
     encrypt_with_gpg, validate_gpg_key_not_ssh, DEFAULT_S2K_COUNT,
 };
 use a::gist::{
-    atomic_replace_gist_file, create_clean_slate_gist, delete_gist, delete_gist_file,
+    atomic_replace_gist_file, delete_gist_file,
     fetch_from_gist, list_gist_files, sync_to_gist,
 };
-use a::ledger::{compute_sha256, print_ledger_table, record_ledger_entry};
+use a::ledger::{compute_sha256, record_ledger_entry};
 use a::totp::handle_totp_command;
 use a::{
     color::{paint_line, TerminalColor},

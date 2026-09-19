@@ -156,7 +156,7 @@ pub struct GistFileInfo {
     pub size: u64,
 }
 
-pub fn list_gist_files_with_details(token: &str, verbose: bool) -> Result<Vec<GistFileInfo>, String> {
+pub fn list_gist_files_with_details(token: &str, _verbose: bool) -> Result<Vec<GistFileInfo>, String> {
     let client = build_client();
     let url = GameConfig::get_gist_url()?;
 
