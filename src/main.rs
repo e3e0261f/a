@@ -2295,6 +2295,34 @@ fn handle_download_command(args: &[String], verbose: bool) {
     }
 }
 
+// 💡 幫助說明與用法規範表（基於 comfy-table 精確對齊）
+fn print_usage_table() {
+    let raw_info = include_str!("../a.info");
+    let mut table = Table::new();
+    table.load_preset(NOTHING);
+
+    for line in raw_info.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(pos) = line.find('#') {
+            let cmd = line[..pos].trim_end();
+            let desc = line[pos..].trim();
+            table.add_row(vec![
+                Cell::new(cmd).fg(Color::Cyan),
+                Cell::new(desc).fg(Color::DarkGrey),
+            ]);
+        } else {
+            table.add_row(vec![
+                Cell::new(line).fg(Color::Cyan),
+                Cell::new(""),
+            ]);
+        }
+    }
+
+    println!("{}", table);
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let current_year = Local::now().format("%Y").to_string();
@@ -2342,7 +2370,7 @@ fn main() {
 
     // 💡 幫助說明查詢：a help / a -h / a --help
     if args.len() >= 2 && (args[1] == "help" || args[1] == "-h" || args[1] == "--help") {
-        print!("{}", include_str!("../a.info"));
+        print_usage_table();
         return;
     }
 
@@ -2388,7 +2416,7 @@ fn main() {
         ]);
         println!("🛡️  Cyber-NOte 機密記事與金鑰加密系統 · 系統狀態");
         println!("{}", table);
-        print!("{}", include_str!("../a.info"));
+        print_usage_table();
         return;
     }
 
