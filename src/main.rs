@@ -2334,22 +2334,44 @@ fn main() {
         return;
     }
 
+    // ✨ 0.6 刪除遠端 Gist 檔案或倉庫：a --delete / a -delete / a -del / a --rm / a -rm / a --delete-repo
+    if args.len() > 1 && (args[1] == "--delete" || args[1] == "-delete" || args[1] == "-del" || args[1] == "--rm" || args[1] == "-rm" || args[1] == "--delete-repo") {
+        handle_delete_repo_command(&args, verbose);
+        return;
+    }
+
     // ✨ 0.7 雲端下載與對齊 (-d / --download / download)
     if args.len() > 1 && (args[1] == "-d" || args[1] == "--download" || args[1] == "download") {
         handle_download_command(&args, verbose);
         return;
     }
 
+    // 🌟 定義嚴格的短選項組合 (Short Flag Cluster) 判定，杜絕 -delete, -del, -dir 等單字型 Flag 誤判
+    let is_short_cluster = |arg: &str, target_char: char| -> bool {
+        if !arg.starts_with('-') || arg.starts_with("--") || arg.len() < 2 {
+            return false;
+        }
+        let s = &arg[1..];
+        let reserved = [
+            "delete", "del", "remove", "rm", "dir", "diff", "new", "init", "help",
+            "show", "sync", "list", "web", "totp", "export", "pass", "key", "keys", "all", "raw"
+        ];
+        if reserved.contains(&s) || s.len() > 3 {
+            return false;
+        }
+        s.chars().all(|c| "slaepxkvd".contains(c)) && s.contains(target_char)
+    };
+
     // ✨ 1. 檔案加密：a -e, a -ep, a -se (支援 --pass, --id, -s 同步混搭)
-    let has_encrypt = args.iter().any(|a| a == "-e" || a == "-ep" || a == "-se" || a == "-es" || a == "--encrypt" || a == "encrypt" || (a.starts_with('-') && !a.starts_with("--") && a.contains('e') && !a.contains('d') && !a.contains('n') && !a.contains('l')));
+    let has_encrypt = args.iter().any(|a| a == "-e" || a == "-ep" || a == "-se" || a == "-es" || a == "--encrypt" || a == "encrypt" || is_short_cluster(a, 'e'));
     if has_encrypt {
         handle_encrypt_command(&args, verbose);
         return;
     }
 
     // ✨ 判斷是否要求雲端同步 (a -s / a --sync / sync) 或列出清單 (a -l / a --list / a -k)
-    let has_sync = args.iter().skip(1).any(|a| a == "-s" || a == "--sync" || a == "sync" || (a.starts_with('-') && !a.starts_with("--") && a.contains('s') && !a.contains('p')));
-    let has_list = args.iter().skip(1).any(|a| a == "-l" || a == "--list" || a == "list" || a == "-k" || a == "--ledger" || a == "--keys" || a == "--key-ledger" || (a.starts_with('-') && !a.starts_with("--") && a.contains('l')));
+    let has_sync = args.iter().skip(1).any(|a| a == "-s" || a == "--sync" || a == "sync" || is_short_cluster(a, 's'));
+    let has_list = args.iter().skip(1).any(|a| a == "-l" || a == "--list" || a == "list" || a == "-k" || a == "--ledger" || a == "--keys" || a == "--key-ledger" || is_short_cluster(a, 'l'));
 
     // 🌟 組合命令：a -l --sync / a -l -s / a -s -l / a --sync -l / a -sl / a -ls
     // 取消原本 a -l --sync 同步列表動作，改為：先上傳年份 gpg 檔案 + 緊接著顯示檔案清單
@@ -2391,7 +2413,7 @@ fn main() {
         return;
     }
 
-    // ✨ 2.52 刪除遠端 Gist 檔案或倉庫：a --delete / a -delete / a -del / a --rm / a -rm
+    // ✨ 2.52 刪除遠端 Gist 檔案或倉庫（保留向後相容）
     if args.len() > 1 && (args[1] == "--delete" || args[1] == "-delete" || args[1] == "-del" || args[1] == "--rm" || args[1] == "-rm" || args[1] == "--delete-repo") {
         handle_delete_repo_command(&args, verbose);
         return;

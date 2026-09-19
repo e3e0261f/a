@@ -233,12 +233,64 @@ export async function executeCommand(
     return lines;
   }
 
+  // 4.5 a --delete / a -delete / a -del / a --rm / a -rm [檔名] (優先於短標籤集群匹配，防止 -delete 誤判)
+  if (args[0] === '--delete' || args[0] === '-delete' || args[0] === '-del' || args[0] === '--rm' || args[0] === '-rm') {
+    if (!config.gistId) {
+      addLine('❌ 錯誤：未配置雲端 Gist ID。請先執行 a --init。', 'red');
+      return lines;
+    }
+    if (args.length < 2) {
+      addLine('❌ 錯誤：請指定欲刪除的遠端檔案名稱。範例: a --delete test.gpg', 'red');
+      return lines;
+    }
+    const targetFile = args[1];
+    addLine(`🗑️ 正在向雲端 Gist 請求刪除檔案: ${targetFile}...`, 'cyan');
+    try {
+      const files = await listGistFiles(config.gistId, config.tokenDecrypted || '');
+      const existsOnRemote = files.some((f) => f.filename === targetFile);
+      if (!existsOnRemote) {
+        addLine(`✨ 遠端 Gist 倉庫中已不存在該檔案: ${targetFile} (確認已自雲端移除)`, 'green', true);
+        addLine('  ↳ 🧹 已同步清除本地相關記錄與快取。', 'gray');
+      } else {
+        await deleteFromGist(config.gistId, targetFile, config.tokenDecrypted || '');
+        addLine(`🗑️ 已成功自遠端 Gist 刪除檔案: ${targetFile}`, 'green', true);
+        addLine('  ↳ 🧹 已同步清除本地快取記錄。', 'gray');
+      }
+      const currentNotes = loadAllNotes();
+      if (currentNotes[targetFile]) {
+        delete currentNotes[targetFile];
+        saveAllNotes(currentNotes);
+        onNotesChange(currentNotes);
+      }
+    } catch (e) {
+      const errStr = e instanceof Error ? e.message : String(e);
+      if (errStr.includes('422') || errStr.includes('404') || errStr.includes('missing_field')) {
+        addLine(`ℹ️ 遠端 Gist 倉庫已無此檔案 (${targetFile}，狀態已對齊)。已清理本地記錄。`, 'cyan');
+      } else {
+        addLine(`❌ 刪除遠端檔案失敗 (${targetFile}): ${errStr}`, 'red');
+      }
+    }
+    return lines;
+  }
+
+  // 🌟 定義嚴格的短選項組合 (Short Flag Cluster) 判定，杜絕 -delete, -del, -dir 等單字型 Flag 誤判
+  const isShortCluster = (arg: string, targetChar: string): boolean => {
+    if (!arg.startsWith('-') || arg.startsWith('--') || arg.length < 2) return false;
+    const s = arg.slice(1);
+    const reserved = [
+      'delete', 'del', 'remove', 'rm', 'dir', 'diff', 'new', 'init', 'help',
+      'show', 'sync', 'list', 'web', 'totp', 'export', 'pass', 'key', 'keys', 'all', 'raw'
+    ];
+    if (reserved.includes(s) || s.length > 3) return false;
+    return [...s].every((c) => 'slaepxkvd'.includes(c)) && s.includes(targetChar);
+  };
+
   // 判斷是否要求雲端同步 (a -s / a --sync) 或列出清單 (a -l / a --list)
   const isSync = args.some(
-    (a) => a === '-s' || a === '--sync' || (a.startsWith('-') && !a.startsWith('--') && a.includes('s') && !a.includes('p') && !a.includes('e'))
+    (a) => a === '-s' || a === '--sync' || isShortCluster(a, 's')
   );
   const isList = args.some(
-    (a) => a === '-l' || a === '--list' || (a.startsWith('-') && !a.startsWith('--') && a.includes('l'))
+    (a) => a === '-l' || a === '--list' || isShortCluster(a, 'l')
   );
 
   const executeSync = async () => {
@@ -626,46 +678,6 @@ export async function executeCommand(
       }
     } catch (e) {
       addLine(`⚠️ 下載失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
-    }
-    return lines;
-  }
-
-  // 7.5 a --delete / a -del / a --rm [檔名]
-  if (args[0] === '--delete' || args[0] === '-delete' || args[0] === '-del' || args[0] === '--rm' || args[0] === '-rm') {
-    if (!config.gistId) {
-      addLine('❌ 錯誤：未配置雲端 Gist ID。請先執行 a --init。', 'red');
-      return lines;
-    }
-    if (args.length < 2) {
-      addLine('❌ 錯誤：請指定欲刪除的遠端檔案名稱。範例: a --delete test.gpg', 'red');
-      return lines;
-    }
-    const targetFile = args[1];
-    addLine(`🗑️ 正在向雲端 Gist 請求刪除檔案: ${targetFile}...`, 'cyan');
-    try {
-      const files = await listGistFiles(config.gistId, config.tokenDecrypted || '');
-      const existsOnRemote = files.some((f) => f.filename === targetFile);
-      if (!existsOnRemote) {
-        addLine(`✨ 遠端 Gist 倉庫中已不存在該檔案: ${targetFile} (確認已自雲端移除)`, 'green', true);
-        addLine('  ↳ 🧹 已同步清除本地相關記錄與快取。', 'gray');
-      } else {
-        await deleteFromGist(config.gistId, targetFile, config.tokenDecrypted || '');
-        addLine(`🗑️ 已成功自遠端 Gist 刪除檔案: ${targetFile}`, 'green', true);
-        addLine('  ↳ 🧹 已同步清除本地快取記錄。', 'gray');
-      }
-      const currentNotes = loadAllNotes();
-      if (currentNotes[targetFile]) {
-        delete currentNotes[targetFile];
-        saveAllNotes(currentNotes);
-        onNotesChange(currentNotes);
-      }
-    } catch (e) {
-      const errStr = e instanceof Error ? e.message : String(e);
-      if (errStr.includes('422') || errStr.includes('404') || errStr.includes('missing_field')) {
-        addLine(`ℹ️ 遠端 Gist 倉庫已無此檔案 (${targetFile}，狀態已對齊)。已清理本地記錄。`, 'cyan');
-      } else {
-        addLine(`❌ 刪除遠端檔案失敗 (${targetFile}): ${errStr}`, 'red');
-      }
     }
     return lines;
   }
