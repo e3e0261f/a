@@ -252,9 +252,9 @@ fn print_content_colored(raw_content: &str) {
 
     for (index, line) in printable_content.lines().enumerate() {
         if index % 2 == 0 {
-            paint_line(line, TerminalColor::Green);
+            paint_line(line, TerminalColor::Normal);
         } else {
-            paint_line(line, TerminalColor::Cyan);
+            paint_line(line, TerminalColor::Gray);
         }
     }
 }
@@ -292,32 +292,45 @@ fn print_web_dependencies_guide(missing_tsx: bool, missing_express: bool) {
     println!("   Rust 原生 CLI 模式 (a -p 加密, a -x 解密, a -u 同步, a -k 歸檔簿)！\n");
 }
 
-// 🚀 創建新檔案至 Gist：a --new [文件名] [文件內容]
+// 🚀 創建新檔案：a --new [文件名] [文件內容] (若無 -s 則在本地創建，有 -s 才上傳遠端)
 fn handle_new_repo_command(args: &[String], verbose: bool) {
-    if args.len() < 3 {
-        println!("❌ 錯誤：請指定檔案名稱與內容。範例: a --new hello.txt \"Hello world\"");
+    let non_flag_args: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).collect();
+    if non_flag_args.is_empty() {
+        println!("❌ 錯誤：請指定檔案名稱。範例: a --new hello.txt \"Hello world\"");
         return;
     }
-    let filename = &args[2];
-    let content = if args.len() > 3 {
-        args[3..].join(" ")
+    let filename = non_flag_args[0];
+    let content = if non_flag_args.len() > 1 {
+        non_flag_args[1..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
     } else {
         "\n".to_string()
     };
 
-    let token = match get_github_token(verbose) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("❌ 無法取得 GitHub Token: {}", e);
-            println!("💡 請先執行 'a --init' 配置並封裝 GPG 憑證。");
-            return;
-        }
-    };
+    let sync = args.iter().any(|a| a == "-s" || a == "--sync" || a == "-u" || a == "--upload");
+    let note_dir = GameConfig::get_note_dir();
 
-    println!("🚀 正在向雲端 Gist 創建並寫入檔案: {}...", filename);
-    match sync_to_gist(&content, filename, &token, verbose) {
-        Ok(_) => println!("✨ 成功在雲端 Gist 創建並寫入檔案: {}", filename),
-        Err(e) => println!("❌ 創建新檔案失敗: {}", e),
+    if !sync {
+        let _ = fs::create_dir_all(&note_dir);
+        let file_path = note_dir.join(filename);
+        match fs::write(&file_path, content.as_bytes()) {
+            Ok(_) => println!("✨ 成功在本地創建並寫入檔案: {:?}", file_path),
+            Err(e) => println!("❌ 寫入本地檔案失敗: {}", e),
+        }
+    } else {
+        let token = match get_github_token(verbose) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("❌ 無法取得 GitHub Token: {}", e);
+                println!("💡 請先執行 'a --init' 配置並封裝 GPG 憑證。");
+                return;
+            }
+        };
+
+        println!("🚀 正在向雲端 Gist 創建並寫入檔案: {}...", filename);
+        match sync_to_gist(&content, filename, &token, verbose) {
+            Ok(_) => println!("✨ 成功在雲端 Gist 創建並寫入檔案: {}", filename),
+            Err(e) => println!("❌ 創建新檔案失敗: {}", e),
+        }
     }
 }
 
@@ -571,31 +584,27 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
     }
     local_only_files.sort();
 
-    // 🌟 新版佈局：一行一個顏色，同顏色代表同文件資訊，文件名獨占一行沒有其他信息
-    println!("\n 🛡️  Cyber-NOte 雲端檔案清單 (Unified Gist Files)");
+    // 🌟 佈局修正：檔案名前添加編號和圖標信息 (🛡️ 遠端 Gist 倉庫文件, 💡 尚未上傳本地文件)
+    // 顏色使用預設黑白灰，白色、灰色交替換行
+    println!("\n 🛡️  Cyber-NOte 檔案清單");
     println!("────────────────────────────────────────────────────────────────────────────");
 
-    let colors = [
-        TerminalColor::Green,
-        TerminalColor::Cyan,
-        TerminalColor::Yellow,
-        TerminalColor::Magenta,
-        TerminalColor::Blue,
-        TerminalColor::BrightGreen,
-        TerminalColor::BrightCyan,
-    ];
-
+    let mut counter = 1;
     let mut idx = 0;
+
     for filename in &cloud_file_names {
-        let color = colors[idx % colors.len()];
-        paint_line(filename, color);
+        let line_str = format!("[{:02}] 🛡️ {}", counter, filename);
+        let color = if idx % 2 == 0 { TerminalColor::Normal } else { TerminalColor::Gray };
+        paint_line(&line_str, color);
+        counter += 1;
         idx += 1;
     }
 
     for filename in &local_only_files {
-        let color = colors[idx % colors.len()];
-        let label = format!("{} (僅本地)", filename);
-        paint_line(&label, color);
+        let line_str = format!("[{:02}] 💡 {}", counter, filename);
+        let color = if idx % 2 == 0 { TerminalColor::Normal } else { TerminalColor::Gray };
+        paint_line(&line_str, color);
+        counter += 1;
         idx += 1;
     }
 
