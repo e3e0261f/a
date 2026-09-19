@@ -630,6 +630,46 @@ export async function executeCommand(
     return lines;
   }
 
+  // 7.5 a --delete / a -del / a --rm [檔名]
+  if (args[0] === '--delete' || args[0] === '-delete' || args[0] === '-del' || args[0] === '--rm' || args[0] === '-rm') {
+    if (!config.gistId) {
+      addLine('❌ 錯誤：未配置雲端 Gist ID。請先執行 a --init。', 'red');
+      return lines;
+    }
+    if (args.length < 2) {
+      addLine('❌ 錯誤：請指定欲刪除的遠端檔案名稱。範例: a --delete test.gpg', 'red');
+      return lines;
+    }
+    const targetFile = args[1];
+    addLine(`🗑️ 正在向雲端 Gist 請求刪除檔案: ${targetFile}...`, 'cyan');
+    try {
+      const files = await listGistFiles(config.gistId, config.tokenDecrypted || '');
+      const existsOnRemote = files.some((f) => f.filename === targetFile);
+      if (!existsOnRemote) {
+        addLine(`✨ 遠端 Gist 倉庫中已不存在該檔案: ${targetFile} (確認已自雲端移除)`, 'green', true);
+        addLine('  ↳ 🧹 已同步清除本地相關記錄與快取。', 'gray');
+      } else {
+        await deleteFromGist(config.gistId, targetFile, config.tokenDecrypted || '');
+        addLine(`🗑️ 已成功自遠端 Gist 刪除檔案: ${targetFile}`, 'green', true);
+        addLine('  ↳ 🧹 已同步清除本地快取記錄。', 'gray');
+      }
+      const currentNotes = loadAllNotes();
+      if (currentNotes[targetFile]) {
+        delete currentNotes[targetFile];
+        saveAllNotes(currentNotes);
+        onNotesChange(currentNotes);
+      }
+    } catch (e) {
+      const errStr = e instanceof Error ? e.message : String(e);
+      if (errStr.includes('422') || errStr.includes('404') || errStr.includes('missing_field')) {
+        addLine(`ℹ️ 遠端 Gist 倉庫已無此檔案 (${targetFile}，狀態已對齊)。已清理本地記錄。`, 'cyan');
+      } else {
+        addLine(`❌ 刪除遠端檔案失敗 (${targetFile}): ${errStr}`, 'red');
+      }
+    }
+    return lines;
+  }
+
   // 8. a -r / a --remove
   if (args[0].startsWith('-r') || args[0] === '--remove') {
     let targetExpr = '';

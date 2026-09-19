@@ -98,10 +98,24 @@ pub fn record_ledger_entry(
     ledger.records.push(entry);
     ledger.updated_at = now.to_rfc3339();
 
-    let path = get_ledger_path();
-    let json = serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?;
-    fs::write(&path, &json).map_err(|e| format!("無法寫入金鑰歸檔簿: {}", e))?;
+    save_ledger(&ledger)
+}
 
+pub fn save_ledger(ledger: &KeyLedger) -> Result<(), String> {
+    let path = get_ledger_path();
+    let json = serde_json::to_string_pretty(ledger).map_err(|e| e.to_string())?;
+    fs::write(&path, &json).map_err(|e| format!("無法寫入金鑰歸檔簿: {}", e))?;
+    Ok(())
+}
+
+pub fn remove_ledger_entry(file_name: &str) -> Result<(), String> {
+    let mut ledger = load_ledger();
+    let before = ledger.records.len();
+    ledger.records.retain(|r| r.file_name != file_name);
+    if ledger.records.len() != before {
+        ledger.updated_at = Local::now().to_rfc3339();
+        save_ledger(&ledger)?;
+    }
     Ok(())
 }
 

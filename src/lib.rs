@@ -29,6 +29,8 @@ pub struct AppUnifiedConfig {
     pub last_updated: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_commit_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_remote_files: Option<Vec<String>>,
 }
 
 pub struct GameConfig;

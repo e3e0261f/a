@@ -392,11 +392,17 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
         for filename in &files {
             println!("🗑️ 正在刪除: {}...", filename);
             match delete_gist_file(filename, &token, verbose) {
-                Ok(_) => println!("🗑️ 已成功刪除: {}", filename),
+                Ok(_) => {
+                    println!("🗑️ 已成功刪除: {}", filename);
+                    let _ = a::ledger::remove_ledger_entry(filename);
+                }
                 Err(e) => println!("❌ 刪除失敗 ({}): {}", filename, e),
             }
         }
-        println!("✨ 全部遠端檔案刪除完畢！");
+        let mut unified_cfg = GameConfig::read_unified_config();
+        unified_cfg.cached_remote_files = Some(Vec::new());
+        let _ = GameConfig::write_unified_config(&unified_cfg);
+        println!("✨ 全部遠端檔案刪除完畢，本地審計簿與快取已同步清空！");
         return;
     }
 
@@ -404,6 +410,9 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
         println!("❌ 錯誤：請指定欲刪除的檔案名稱或編號。範例: a --delete 1 或 a --delete file1.txt file2.gpg");
         return;
     }
+
+    let mut unified_cfg = GameConfig::read_unified_config();
+    let mut cached_files = unified_cfg.cached_remote_files.clone().unwrap_or_else(|| files.clone());
 
     for target in targets {
         let mut filename_to_delete = target.to_string();
@@ -415,12 +424,37 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
             }
         }
 
+        if !files.contains(&filename_to_delete) {
+            println!("✨ 遠端 Gist 倉庫中已無此檔案: {} (確認已自雲端移除)", filename_to_delete);
+            let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
+            cached_files.retain(|f| f != &filename_to_delete);
+            println!("  ↳ 🧹 已同步清除本地審計簿與快取中關於「{}」的記錄。", filename_to_delete);
+            continue;
+        }
+
         println!("🗑️ 正在向雲端 Gist 請求刪除檔案: {}...", filename_to_delete);
         match delete_gist_file(&filename_to_delete, &token, verbose) {
-            Ok(_) => println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete),
-            Err(e) => println!("❌ 刪除遠端檔案失敗 ({}): {}", filename_to_delete, e),
+            Ok(_) => {
+                println!("🗑️ 已成功自遠端 Gist 刪除檔案: {}", filename_to_delete);
+                let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
+                cached_files.retain(|f| f != &filename_to_delete);
+                println!("  ↳ 🧹 已同步清除本地審計簿與快取中關於「{}」的記錄。", filename_to_delete);
+            }
+            Err(e) => {
+                if e.contains("422") || e.contains("404") || e.contains("missing_field") {
+                    println!("ℹ️ 遠端 Gist 倉庫已無此檔案 ({}，狀態已對齊)。", filename_to_delete);
+                    let _ = a::ledger::remove_ledger_entry(&filename_to_delete);
+                    cached_files.retain(|f| f != &filename_to_delete);
+                    println!("  ↳ 🧹 已同步清除本地審計簿記錄。");
+                } else {
+                    println!("❌ 刪除遠端檔案失敗 ({}): {}", filename_to_delete, e);
+                }
+            }
         }
     }
+
+    unified_cfg.cached_remote_files = Some(cached_files);
+    let _ = GameConfig::write_unified_config(&unified_cfg);
 }
 
 // 🛡️ 檢視單一檔案詳細鑑識資訊 (a --show <文件名>)
@@ -519,85 +553,100 @@ fn handle_list_and_ledger_command(verbose: bool) {
 
     // 獲取遠端 Gist 檔案詳情（含大小）
     let mut remote_files_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    if let Ok(details) = a::gist::list_gist_files_with_details(&token, verbose) {
+    let remote_details_res = a::gist::list_gist_files_with_details(&token, verbose);
+    let is_online = remote_details_res.is_ok();
+
+    if let Ok(details) = remote_details_res {
         for d in details {
             remote_files_map.insert(d.filename, d.size);
         }
     }
 
-    // 若 Commit Hash 不同，則連線遠端 Gist 掃描並更新/持久化金鑰審計簿
-    if sync_ledger {
-        if verbose {
-            println!("📡 [雲端與金鑰鑑識 Sync] 正在同步遠端檔案至本地審計簿...");
-        }
-        if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, false) {
-            unified_cfg.cached_commit_hash = Some(remote_commit);
-            let _ = GameConfig::write_unified_config(&unified_cfg);
+    // 若線上連線成功，則以遠端最新列表覆蓋本地快取，並清理本地已自遠端刪除的孤立記錄
+    if is_online {
+        // 1. 同步覆蓋清理本地審計簿：若檔案在遠端已被刪除，且本地磁碟亦不存在，則自本地審計簿徹底剔除
+        let initial_records_count = ledger.records.len();
+        ledger.records.retain(|r| {
+            remote_files_map.contains_key(&r.file_name) || note_dir.join(&r.file_name).exists()
+        });
+        if ledger.records.len() != initial_records_count {
+            let _ = a::ledger::save_ledger(&ledger);
         }
 
-        for (filename, &remote_size) in &remote_files_map {
-            let is_gpg = filename.ends_with(".gpg");
-            let local_path = note_dir.join(filename);
-            
-            let existing_record = ledger.records.iter().find(|r| &r.file_name == filename);
-            let has_valid_key = if let Some(rec) = existing_record {
-                if is_gpg {
-                    !rec.key_id.is_empty() && rec.key_id != "-" && !rec.key_id.contains("未知")
-                } else {
-                    true
-                }
-            } else {
-                false
-            };
-
-            if has_valid_key {
-                continue;
+        // 2. 若 Commit Hash 變動或尚未登記過新檔案，則同步新檔案元數據至審計簿
+        if sync_ledger {
+            if verbose {
+                println!("📡 [雲端與金鑰鑑識 Sync] 正在同步遠端新檔案至本地審計簿...");
+            }
+            if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, false) {
+                unified_cfg.cached_commit_hash = Some(remote_commit);
+                let _ = GameConfig::write_unified_config(&unified_cfg);
             }
 
-            let mut key_id = String::new();
-            let mut cipher_mode = "GPG_ENCRYPTED".to_string();
-
-            if !is_gpg {
-                key_id = "-".to_string();
-                cipher_mode = "PLAINTEXT".to_string();
-            } else {
-                if local_path.exists() {
-                    let extracted = a::ledger::extract_key_id_from_gpg_file(&local_path);
-                    if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
-                        key_id = extracted;
+            for (filename, &remote_size) in &remote_files_map {
+                let is_gpg = filename.ends_with(".gpg");
+                let local_path = note_dir.join(filename);
+                
+                let existing_record = ledger.records.iter().find(|r| &r.file_name == filename);
+                let has_valid_key = if let Some(rec) = existing_record {
+                    if is_gpg {
+                        !rec.key_id.is_empty() && rec.key_id != "-" && !rec.key_id.contains("未知")
+                    } else {
+                        true
                     }
                 } else {
-                    if let Ok(content) = a::gist::fetch_from_gist(filename, &token, false) {
-                        let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
-                        if fs::write(&temp_path, content.as_bytes()).is_ok() {
-                            let extracted = a::ledger::extract_key_id_from_gpg_file(&temp_path);
-                            if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
-                                key_id = extracted;
+                    false
+                };
+
+                if has_valid_key {
+                    continue;
+                }
+
+                let mut key_id = String::new();
+                let mut cipher_mode = "GPG_ENCRYPTED".to_string();
+
+                if !is_gpg {
+                    key_id = "-".to_string();
+                    cipher_mode = "PLAINTEXT".to_string();
+                } else {
+                    if local_path.exists() {
+                        let extracted = a::ledger::extract_key_id_from_gpg_file(&local_path);
+                        if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
+                            key_id = extracted;
+                        }
+                    } else {
+                        if let Ok(content) = a::gist::fetch_from_gist(filename, &token, false) {
+                            let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
+                            if fs::write(&temp_path, content.as_bytes()).is_ok() {
+                                let extracted = a::ledger::extract_key_id_from_gpg_file(&temp_path);
+                                if !extracted.contains("對稱") && !extracted.contains("封包") && !extracted.is_empty() {
+                                    key_id = extracted;
+                                }
+                                let _ = fs::remove_file(&temp_path);
                             }
-                            let _ = fs::remove_file(&temp_path);
                         }
                     }
                 }
+
+                let size = if local_path.exists() {
+                    fs::metadata(&local_path).map(|m| m.len() as usize).unwrap_or(remote_size as usize)
+                } else {
+                    remote_size as usize
+                };
+
+                let _ = a::ledger::record_ledger_entry(
+                    filename,
+                    &local_path.to_string_lossy(),
+                    &key_id,
+                    &cipher_mode,
+                    0,
+                    1,
+                    &vec![0u8; size],
+                    "Synced via Gist alignment",
+                );
             }
-
-            let size = if local_path.exists() {
-                fs::metadata(&local_path).map(|m| m.len() as usize).unwrap_or(remote_size as usize)
-            } else {
-                remote_size as usize
-            };
-
-            let _ = a::ledger::record_ledger_entry(
-                filename,
-                &local_path.to_string_lossy(),
-                &key_id,
-                &cipher_mode,
-                0,
-                1,
-                &vec![0u8; size],
-                "Synced via Gist alignment",
-            );
+            ledger = a::ledger::load_ledger();
         }
-        ledger = a::ledger::load_ledger();
     }
 
     // 收集本地目錄檔案
@@ -615,17 +664,26 @@ fn handle_list_and_ledger_command(verbose: bool) {
     let mut cloud_file_names: Vec<String> = Vec::new();
     let mut local_only_files: Vec<String> = Vec::new();
 
-    let mut remote_keys: Vec<String> = remote_files_map.keys().cloned().collect();
-    remote_keys.sort();
-    for fname in remote_keys {
-        cloud_file_names.push(fname);
-    }
-    for r in &ledger.records {
-        if remote_files_map.get(&r.file_name).is_none() && !cloud_file_names.contains(&r.file_name) {
-            cloud_file_names.push(r.file_name.clone());
+    if is_online {
+        // 🌟 線上模式：遠端清單 100% 以 GitHub Gist 實際取得的檔案為準，絕不盲目攙入歷史殘留檔案！
+        let mut remote_keys: Vec<String> = remote_files_map.keys().cloned().collect();
+        remote_keys.sort();
+        cloud_file_names = remote_keys;
+
+        // 覆蓋更新本地持久化快取
+        unified_cfg.cached_remote_files = Some(cloud_file_names.clone());
+        let _ = GameConfig::write_unified_config(&unified_cfg);
+    } else {
+        // 離線/斷網模式：自本地持久化快取優雅載入
+        println!("⚠️ [離線檢索] 無法連線遠端 GitHub Gist，正在載入本地持久化快取清單...");
+        if let Some(ref cached) = unified_cfg.cached_remote_files {
+            cloud_file_names = cached.clone();
+        } else {
+            cloud_file_names = ledger.records.iter().map(|r| r.file_name.clone()).collect();
         }
+        cloud_file_names.sort();
+        cloud_file_names.dedup();
     }
-    cloud_file_names.sort();
 
     for lfile in local_files {
         let in_cloud = cloud_file_names.contains(&lfile);

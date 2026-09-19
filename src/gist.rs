@@ -417,9 +417,17 @@ pub fn delete_gist_file(file_name: &str, token: &str, verbose: bool) -> Result<(
             let status = res.status();
             if status.is_success() {
                 Ok(())
+            } else if status.as_u16() == 404 {
+                // 遠端檔案已不存在
+                Ok(())
             } else {
                 let text = res.text().unwrap_or_default();
-                Err(format!("❌ 刪除雲端檔案失敗，狀態碼: {} (詳情: {})", status, text))
+                if status.as_u16() == 422 && text.contains("missing_field") && text.contains("files") {
+                    // GitHub Gist 在檔案本就不存在且 payload 僅含 null 時返回 422 missing_field files
+                    Ok(())
+                } else {
+                    Err(format!("❌ 刪除雲端檔案失敗，狀態碼: {} (詳情: {})", status, text))
+                }
             }
         }
         Err(e) => Err(format!("❌ 發送刪除請求失敗: {}", e)),
