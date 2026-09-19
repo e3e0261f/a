@@ -358,8 +358,72 @@ fn handle_delete_repo_command(args: &[String], verbose: bool) {
     }
 }
 
+// 🛡️ 檢視單一檔案詳細鑑識資訊 (a --show <文件名>)
+fn handle_show_command(args: &[String], verbose: bool) {
+    let target_file = args.iter().skip(1).find(|&a| a != "--show" && !a.starts_with('-')).cloned();
+    let filename = match target_file {
+        Some(f) => f,
+        None => {
+            println!("❌ 錯誤：請指定欲檢視的檔案名稱。範例: a --show 2021homelee.gpg");
+            return;
+        }
+    };
+
+    let note_dir = GameConfig::get_note_dir();
+    let ledger = a::ledger::load_ledger();
+    let token = get_github_token(verbose).ok();
+
+    let mut remote_size = 0u64;
+    let mut in_cloud = false;
+    if let Some(ref t) = token {
+        if let Ok(details) = a::gist::list_gist_files_with_details(t, false) {
+            for d in details {
+                if d.filename == filename {
+                    remote_size = d.size;
+                    in_cloud = true;
+                }
+            }
+        }
+    }
+
+    let local_path = note_dir.join(&filename);
+    let local_exists = local_path.exists();
+    let entry_opt = ledger.records.iter().find(|r| r.file_name == filename);
+
+    let is_gpg = filename.ends_with(".gpg");
+    let key_id = entry_opt.map(|e| e.key_id.clone()).unwrap_or_else(|| if is_gpg { "未知".to_string() } else { "-".to_string() });
+    let cipher_mode = entry_opt.map(|e| e.cipher_mode.clone()).unwrap_or_else(|| if is_gpg { "GPG_ENCRYPTED".to_string() } else { "PLAINTEXT".to_string() });
+    let layer = entry_opt.map(|e| e.layer).unwrap_or_else(|| if is_gpg { 1 } else { 0 });
+    let notes = entry_opt.map(|e| e.notes.clone()).unwrap_or_else(|| "無審計備註".to_string());
+
+    let bytes_size = if local_exists {
+        fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        remote_size
+    };
+
+    let cloud_status = if in_cloud || entry_opt.is_some() { "🌐 雲端已備份" } else { "❌ 僅本地存在" };
+    let status_str = if !is_gpg { "📄 明文" } else { "🛡️ GPG/RSA" };
+
+    println!("┌────────────────────────────────────────────────────────────────────────────┐");
+    println!("│ 🛡️  Cyber-NOte 檔案鑑識與金鑰審計詳情                                       │");
+    println!("├────────────────────────────────────────────────────────────────────────────┤");
+    println!("│ 檔案名稱 : {:<64} │", filename);
+    println!("│ 檔案狀態 : {:<64} │", status_str);
+    println!("│ 雲端備份 : {:<64} │", cloud_status);
+    println!("│ 金鑰短碼 : {:<64} │", key_id);
+    println!("│ 加密體系 : {:<64} │", cipher_mode);
+    println!("│ 封裝層級 : {:<64} │", format!("第 {} 層", layer));
+    println!("│ 檔案大小 : {:<64} │", format!("{} Bytes", bytes_size));
+    println!("│ 審計備註 : {:<64} │", notes);
+    println!("└────────────────────────────────────────────────────────────────────────────┘");
+}
+
 // 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k / a -l --sync)
 fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
+    // 🌟 動作提示優先：立即輸出檢索提示，解決空空延遲問題
+    println!("📡 [雲端檢索] 正在連線 GitHub Gist 比對遠端 Hash 與清單，請稍候...");
+
     let note_dir = GameConfig::get_note_dir();
     let mut ledger = a::ledger::load_ledger();
     let mut unified_cfg = GameConfig::read_unified_config();
@@ -399,8 +463,7 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
 
     // 若指定 sync 或 Commit Hash 不同，則連線遠端 Gist 掃描並更新/持久化金鑰審計簿
     if sync {
-        println!("📡 [雲端與金鑰鑑識 Sync] 正在連線 GitHub Gist 獲取最新遠端檔案清單...");
-        // 更新 commit hash cache
+        println!("📡 [雲端與金鑰鑑識 Sync] 正在同步遠端檔案至本地審計簿...");
         if let Ok(remote_commit) = a::gist::get_gist_commit_hash(&token, false) {
             unified_cfg.cached_commit_hash = Some(remote_commit);
             let _ = GameConfig::write_unified_config(&unified_cfg);
@@ -410,27 +473,21 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
             let is_gpg = filename.ends_with(".gpg");
             let local_path = note_dir.join(filename);
             
-            // 檢查本地 ledger 是否已經有完整且有效的短碼資訊
             let existing_record = ledger.records.iter().find(|r| &r.file_name == filename);
             let has_valid_key = if let Some(rec) = existing_record {
                 if is_gpg {
                     !rec.key_id.is_empty() && rec.key_id != "-" && !rec.key_id.contains("未知")
                 } else {
-                    true // 明文檔案本就完整
+                    true
                 }
             } else {
                 false
             };
 
-            // 如果本地信息已經完整（已有短碼），則跳過遠端檢查或下載，直接保留本地資訊
             if has_valid_key {
-                if verbose {
-                    println!("⚡ [略過已同步] 檔案 {} 於本地已有完整短碼資訊，略過重複檢索。", filename);
-                }
                 continue;
             }
 
-            println!("🔍 [同步鑑識] 正在識別新檔案或補充短碼: {}...", filename);
             let mut key_id = String::new();
             let mut cipher_mode = "GPG_ENCRYPTED".to_string();
 
@@ -444,7 +501,6 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
                         key_id = extracted;
                     }
                 } else {
-                    // 實在萬不得已，自雲端下載臨時快取以識別金鑰短碼
                     if let Ok(content) = a::gist::fetch_from_gist(filename, &token, false) {
                         let temp_path = note_dir.join(format!(".temp_inspect_{}", filename));
                         if fs::write(&temp_path, content.as_bytes()).is_ok() {
@@ -475,7 +531,7 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
                 "Synced via Gist alignment",
             );
         }
-        ledger = a::ledger::load_ledger(); // 重新載入更新後的持久化 ledger
+        ledger = a::ledger::load_ledger();
     }
 
     // 收集本地目錄檔案
@@ -490,7 +546,6 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
         }
     }
 
-    // 分類：雲端有的檔案 (cloud-backed) 與 僅本地有的檔案 (local-only)
     let mut cloud_file_names: Vec<String> = Vec::new();
     let mut local_only_files: Vec<String> = Vec::new();
 
@@ -516,116 +571,37 @@ fn handle_list_and_ledger_command(mut sync: bool, verbose: bool) {
     }
     local_only_files.sort();
 
-    // 格式化大小函式：嚴格確保固定 4 字元寬度 (例如 " 42b", "512b", "6.5k", "0.1m") 絕不打亂排版
-    let format_size = |bytes: u64| -> String {
-        let b = bytes as f64;
-        if b == 0.0 {
-            "  0b".to_string()
-        } else if b < 10.0 {
-            format!("{:>3}b", bytes)
-        } else if b < 100.0 {
-            format!("{:>3}b", bytes)
-        } else if b < 1024.0 {
-            format!("{:>3}b", bytes)
-        } else if b < 10.0 * 1024.0 {
-            format!("{:.1}k", b / 1024.0)
-        } else if b < 100.0 * 1024.0 {
-            format!("{:.1}k", b / 1024.0)
-        } else if b < 1024.0 * 1024.0 {
-            format!("{:.1}k", b / 1024.0)
-        } else if b < 10.0 * 1024.0 * 1024.0 {
-            format!("{:.1}m", b / (1024.0 * 1024.0))
-        } else if b < 1000.0 * 1024.0 * 1024.0 {
-            format!("{:.1}m", b / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1}g", b / (1024.0 * 1024.0 * 1024.0))
-        }
-    };
+    // 🌟 新版佈局：一行一個顏色，同顏色代表同文件資訊，文件名獨占一行沒有其他信息
+    println!("\n 🛡️  Cyber-NOte 雲端檔案清單 (Unified Gist Files)");
+    println!("────────────────────────────────────────────────────────────────────────────");
 
-    // 依照 style.txt 規範格式輸出表格 (緊湊排版，嚴格對齊理想樣式)
-    println!(" 🛡️  Cyber-NOte 雲端檔案清單與金鑰審計鑑識中心 (Unified Ledger & Gist Audit)");
-    println!("---- -------------- ---------------- ---- ---- ------------------------------------------------------------------");
-    println!("{:<4} {:<14} {:<16} {:<4} {:<4} {:<65}", "編號", "加密", "短碼", "雲", "大小", "檔案名稱");
-    println!("---- -------------- ---------------- ---- ---- ------------------------------------------------------------------");
+    let colors = [
+        TerminalColor::Green,
+        TerminalColor::Cyan,
+        TerminalColor::Yellow,
+        TerminalColor::Magenta,
+        TerminalColor::Blue,
+        TerminalColor::BrightGreen,
+        TerminalColor::BrightCyan,
+    ];
 
-    let mut counter = 1;
-
-    // 1. 渲染雲端備份檔案 (有編號)
+    let mut idx = 0;
     for filename in &cloud_file_names {
-        let local_path = note_dir.join(filename);
-        let entry_opt = ledger.records.iter().find(|r| &r.file_name == filename);
-
-        let mut key_id = entry_opt.map(|e| e.key_id.clone()).unwrap_or_default();
-        let is_gpg = filename.ends_with(".gpg");
-
-        if !is_gpg && (key_id.is_empty() || key_id == "-") {
-            key_id = "-".to_string();
-        }
-
-        let short_key = if key_id.len() > 8 && key_id != "-" {
-            key_id[key_id.len() - 8..].to_string()
-        } else if key_id.is_empty() {
-            "未同步".to_string()
-        } else {
-            key_id
-        };
-
-        let status_str = if !is_gpg {
-            "📄 明文"
-        } else if short_key == "未同步" {
-            "⚠️ 待同步"
-        } else {
-            "🛡️ GPG/RSA"
-        };
-
-        // 取得檔案大小：優先用本地，若無則用雲端 API 大小
-        let bytes_size = if local_path.exists() {
-            fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
-        } else {
-            *remote_files_map.get(filename).unwrap_or(&0)
-        };
-        let size_str = format_size(bytes_size);
-
-        // 雲端備份圖示 (🌐 表示雲端有備份)
-        let cloud_icon = "🌐";
-
-        let idx_str = format!("[{:02}]", counter);
-        counter += 1;
-
-        println!(
-            "{:<4} {:<14} {:<16} {:<4} {:<4} {:<65}",
-            idx_str,
-            status_str,
-            short_key,
-            cloud_icon,
-            size_str,
-            filename
-        );
+        let color = colors[idx % colors.len()];
+        paint_line(filename, color);
+        idx += 1;
     }
 
-    // 2. 渲染僅本地存在而雲端沒有的檔案 (編號用 xx 替代，放於最後)
     for filename in &local_only_files {
-        let local_path = note_dir.join(filename);
-        let is_gpg = filename.ends_with(".gpg");
-        let status_str = if is_gpg { "🛡️ GPG/RSA" } else { "📄 明文" };
-        let short_key = "僅本地".to_string();
-        let bytes_size = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
-        let size_str = format_size(bytes_size);
-        let cloud_icon = "❌"; // 雲端無備份
-
-        println!(
-            "{:<4} {:<14} {:<16} {:<4} {:<4} {:<65}",
-            "[xx]",
-            status_str,
-            short_key,
-            cloud_icon,
-            size_str,
-            filename
-        );
+        let color = colors[idx % colors.len()];
+        let label = format!("{} (僅本地)", filename);
+        paint_line(&label, color);
+        idx += 1;
     }
 
-    println!("─────────────────────────────────────────────────────────────────────────────────────────────────────────────");
-    println!("💡 快速檢索: 'a -l' | 強制同步更新: 'a -l --sync' | 下載: 'a -d [編號或檔名]' | 刪除: 'a --delete [編號或檔名]'");
+    println!("────────────────────────────────────────────────────────────────────────────");
+    println!("💡 想查看檔案詳細資訊，請使用參數: a --show <文件名>");
+    println!("💡 強制與雲端同步更新: a -l --sync\n");
 }
 
 // 🛡️ 遠端檔案在位套殼加密控制邏輯 (Remote In-Place Encapsulate & Clean Original)
@@ -1607,20 +1583,20 @@ fn handle_encrypt_command(args: &[String], verbose: bool) {
     println!("│ 金鑰審計 : {:<64} │", "已鎖定存檔至金鑰歸檔簿 (Key Ledger)");
     println!("└────────────────────────────────────────────────────────────────────────────┘");
 
-    // 若指定 -s / --sync，同步上傳至 Gist 雲端
+    // 若指定 -s / --sync / -se 等，同步上傳至 Gist 雲端
     if upload {
         match get_github_token(verbose) {
             Ok(token) => {
-                println!("☁️  [雲端同步] 正在將加密檔案【{}】上傳至 Gist...", out_file_name);
+                println!("☁️  [2/2 上傳] 正在將加密包裹安全推送至雲端 Gist【{}】...", out_file_name);
                 match sync_to_gist(&ciphertext, out_file_name, &token, verbose) {
-                    Ok(_) => println!("✅ 雲端上傳成功！已作為加密包裹持久化存檔。"),
-                    Err(e) => println!("⚠️  雲端上傳失敗: {}", e),
+                    Ok(_) => println!("✅ [成功] 檔案已完成端到端加密並成功上傳至雲端！"),
+                    Err(e) => println!("❌ [失敗] 雲端上傳失敗: {}", e),
                 }
             }
             Err(e) => println!("❌ 雲端憑證讀取失敗，略過上傳: {}", e),
         }
     } else {
-        println!("💡 提示：未加 -s 參數，僅在本地完成加密落盤，無雲端上傳動作。");
+        println!("💡 提示：未結合 -s 參數，僅在本地完成加密落盤。");
     }
 }
 
@@ -1716,23 +1692,40 @@ fn main() {
         .any(|arg| arg == "-v" || arg == "-vv" || arg == "--verbose");
 
     // ✨ 0. Web 網頁端管理引擎 (-w / --web / web)
-    if args.len() > 1 && (args[1] == "-w" || args[1] == "--web" || args[1] == "web") {
+    let has_web = args.iter().any(|a| a == "-w" || a == "--web" || a == "web");
+    if has_web {
         let sub_action = args
             .iter()
-            .skip(2)
+            .skip(1)
             .find(|&a| !a.starts_with("-"))
             .map(|s| s.as_str());
         let port_opt = args
             .iter()
-            .skip(2)
+            .skip(1)
             .find(|&a| a.chars().all(|c| c.is_ascii_digit()))
             .map(|s| s.as_str());
         handle_web_command(sub_action, port_opt);
         return;
     }
 
-    // ✨ 1. 檔案加密：a -e, a -ep (支援 --pass, --id, -s 同步)
-    if args.len() > 1 && (args[1] == "-e" || args[1] == "-ep" || args[1] == "--encrypt" || args[1] == "encrypt") {
+    // ✨ 0.5 檔案詳情檢識：a --show <文件名>
+    let has_show = args.iter().any(|a| a == "--show");
+    if has_show {
+        handle_show_command(&args, verbose);
+        return;
+    }
+
+    // ✨ 3. 金鑰審計與雲端清單：a -l / a -k / 支援混搭如 -sl
+    let has_list = args.iter().any(|a| a == "-l" || a == "--list" || a == "-k" || a == "--ledger" || a == "--keys" || a == "--key-ledger" || (a.starts_with('-') && a.contains('l') && !a.contains('e')));
+    if has_list {
+        let sync = args.iter().any(|a| a == "--sync" || a == "-s" || a == "--update" || (a.starts_with('-') && a.contains('s')));
+        handle_list_and_ledger_command(sync, verbose);
+        return;
+    }
+
+    // ✨ 1. 檔案加密：a -e, a -ep, a -se (支援 --pass, --id, -s 同步混搭)
+    let has_encrypt = args.iter().any(|a| a == "-e" || a == "-ep" || a == "--encrypt" || a == "encrypt" || (a.starts_with('-') && a.contains('e')));
+    if has_encrypt {
         handle_encrypt_command(&args, verbose);
         return;
     }
