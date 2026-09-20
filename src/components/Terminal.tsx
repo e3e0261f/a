@@ -177,6 +177,13 @@ export const Terminal: React.FC<TerminalProps> = ({
           if (line.color === 'gray') colorClass = 'text-gray-500';
           if (line.color === 'white') colorClass = 'text-white';
 
+          let bgClass = '';
+          if (line.bg === 'lightRed') {
+            bgClass = 'bg-[#40131b]/90 text-rose-100 px-2 py-0.5 rounded-sm border-l-2 border-rose-500/80';
+          } else if (line.bg === 'lightBlue') {
+            bgClass = 'bg-[#0f2540]/90 text-sky-100 px-2 py-0.5 rounded-sm border-l-2 border-sky-500/80';
+          }
+
           const renderTextWithLinks = (text: string) => {
             const urlRegex = /(https?:\/\/[^\s]+)/g;
             const parts = text.split(urlRegex);
@@ -203,7 +210,7 @@ export const Terminal: React.FC<TerminalProps> = ({
           return (
             <div
               key={line.id}
-              className={`leading-relaxed break-words whitespace-pre-wrap ${colorClass} ${
+              className={`leading-relaxed break-words whitespace-pre-wrap ${bgClass || colorClass} ${
                 line.isBold ? 'font-semibold' : 'font-normal'
               }`}
             >

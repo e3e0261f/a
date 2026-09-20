@@ -251,9 +251,9 @@ fn print_content_colored(raw_content: &str) {
 
     for (index, line) in printable_content.lines().enumerate() {
         if index % 2 == 0 {
-            paint_line(line, TerminalColor::Normal);
+            paint_line(line, TerminalColor::LightRedBg);
         } else {
-            paint_line(line, TerminalColor::Gray);
+            paint_line(line, TerminalColor::LightBlueBg);
         }
     }
 }

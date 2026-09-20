@@ -20,6 +20,7 @@ export interface TerminalOutputLine {
   id: string;
   text: string;
   color?: 'green' | 'cyan' | 'yellow' | 'red' | 'gray' | 'white' | 'purple';
+  bg?: 'lightRed' | 'lightBlue' | 'none';
   isBold?: boolean;
 }
 

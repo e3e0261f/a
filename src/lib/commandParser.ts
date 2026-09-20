@@ -49,13 +49,15 @@ export async function executeCommand(
   const addLine = (
     text: string,
     color?: 'green' | 'cyan' | 'yellow' | 'red' | 'gray' | 'white' | 'purple',
-    isBold?: boolean
+    isBold?: boolean,
+    bg?: 'lightRed' | 'lightBlue' | 'none'
   ) => {
     lines.push({
       id: Math.random().toString(36).substring(2, 9),
       text,
       color,
       isBold,
+      bg,
     });
   };
 
@@ -694,8 +696,10 @@ export async function executeCommand(
     }
 
     noteLines.forEach((line, index) => {
-      const color = index % 2 === 0 ? 'green' : 'cyan';
-      addLine(line, color);
+      const isEven = index % 2 === 0;
+      const color = isEven ? 'white' : 'white';
+      const bg = isEven ? 'lightRed' : 'lightBlue';
+      addLine(line, color, false, bg);
     });
     return lines;
   }

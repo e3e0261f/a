@@ -437,33 +437,35 @@ export const NoteViewer: React.FC<NoteViewerProps> = ({
             📂 暫無靈感記錄，使用上方輸入框或指令列加入第一筆記錄。
           </div>
         ) : (
-          /* Alternating Green / Cyan Terminal Colored Lines (from color.rs) */
-          <div className="divide-y divide-gray-900/60 font-mono text-sm">
+          /* Alternating Light Red / Light Blue Terminal Colored Lines (from color.rs) */
+          <div className="space-y-1 font-mono text-sm p-2">
             {noteLines.map((line, idx) => {
               const isEven = idx % 2 === 0;
               const isMatch = filterKeyword && line.toLowerCase().includes(filterKeyword.toLowerCase());
-              // Green for even lines, Cyan for odd lines (exact rust color.rs match)
-              const textColor = isEven ? 'text-emerald-400' : 'text-cyan-400';
+              // Light red for even lines, Light blue for odd lines (exact rust color.rs match)
+              const bgClass = isEven
+                ? 'bg-[#40131b]/80 text-rose-100 border-l-2 border-rose-500/80 hover:bg-[#501822]'
+                : 'bg-[#0f2540]/80 text-sky-100 border-l-2 border-sky-500/80 hover:bg-[#163558]';
 
               return (
                 <div
                   key={idx}
-                  className={`flex items-start justify-between group px-4 py-2 hover:bg-[#111622] transition ${
-                    isMatch ? 'bg-cyan-950/40 ring-1 ring-cyan-500/30' : ''
+                  className={`flex items-start justify-between group px-3 py-1.5 rounded-sm transition ${bgClass} ${
+                    isMatch ? 'ring-2 ring-amber-400/80' : ''
                   }`}
                 >
                   <div className="flex items-start gap-3 flex-1 min-w-0">
-                    <span className="text-gray-600 text-xs select-none w-8 text-right flex-shrink-0 pt-0.5">
+                    <span className="text-gray-400/80 text-xs select-none w-8 text-right flex-shrink-0 pt-0.5 font-semibold">
                       {idx + 1}
                     </span>
-                    <span className={`break-words whitespace-pre-wrap leading-relaxed ${textColor}`}>
+                    <span className="break-words whitespace-pre-wrap leading-relaxed">
                       {line}
                     </span>
                   </div>
 
                   <button
                     onClick={() => handleDeleteLine(idx)}
-                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-rose-400 hover:bg-rose-950/40 rounded transition ml-2 flex-shrink-0"
+                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-rose-300 hover:bg-rose-950/60 rounded transition ml-2 flex-shrink-0"
                     title={`刪除第 ${idx + 1} 行 (倒數第 ${noteLines.length - idx} 行)`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
