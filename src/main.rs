@@ -1796,10 +1796,14 @@ fn remove_empty_dirs_recursive(dir: &Path) {
     }
 }
 
-// ☁️ 雲端同步與對齊 (a -s / a --sync / a -s --all / a -bs / a -sb)
+// ☁️ 雲端同步與對齊 (a -s / a --sync / a -s --all / a -bs / a -sb / a -su / a -us)
 fn handle_sync_command(args: &[String], verbose: bool) {
     let timer = Instant::now();
-    let is_raw = args.iter().any(|arg| arg == "--raw" || arg == "-u");
+    let is_raw = args.iter().any(|arg| {
+        arg == "--raw"
+            || arg == "-u"
+            || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('u'))
+    });
     let is_all = args.iter().skip(1).any(|arg| {
         arg == "--all"
             || arg == "-a"
