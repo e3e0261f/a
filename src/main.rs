@@ -564,7 +564,11 @@ fn handle_show_command(args: &[String], verbose: bool) {
 
 // 🛡️ 雲端檔案清單與金鑰審計鑑識合併處理 (a -l / a -k)
 fn handle_list_and_ledger_command(verbose: bool) {
-    // 🌟 動作提示優先：立即輸出檢索提示，解決空空延遲問題
+    let gist_id = GameConfig::get_gist_id().unwrap_or_default();
+    if !gist_id.is_empty() && gist_id != "未配置" {
+        let clean_id = GameConfig::extract_clean_id(&gist_id);
+        println!("🌐 倉庫網址 : https://gist.github.com/{}", clean_id);
+    }
     println!("📡 [雲端檢索] 正在連線 GitHub Gist 比對遠端 Hash 與清單，請稍候...");
 
     let note_dir = GameConfig::get_note_dir();
@@ -739,13 +743,6 @@ fn handle_list_and_ledger_command(verbose: bool) {
     }
     local_only_files.sort();
 
-    println!("\n🛡️  Cyber-NOte 檔案清單");
-    let gist_id = GameConfig::get_gist_id().unwrap_or_default();
-    if !gist_id.is_empty() && gist_id != "未配置" {
-        let clean_id = GameConfig::extract_clean_id(&gist_id);
-        println!("🌐 倉庫網址 : https://gist.github.com/{}", clean_id);
-    }
-
     let mut table = Table::new();
     table.load_preset(NOTHING);
 
@@ -754,8 +751,7 @@ fn handle_list_and_ledger_command(verbose: bool) {
     for filename in &cloud_file_names {
         table.add_row(vec![
             Cell::new(format!("[{:02}]", counter)).fg(Color::Cyan),
-            Cell::new("🛡️"),
-            Cell::new(filename).fg(Color::White),
+            Cell::new(filename).fg(Color::Green),
         ]);
         counter += 1;
     }
@@ -763,7 +759,6 @@ fn handle_list_and_ledger_command(verbose: bool) {
     for filename in &local_only_files {
         table.add_row(vec![
             Cell::new(format!("[{:02}]", counter)).fg(Color::Cyan),
-            Cell::new("💡"),
             Cell::new(filename).fg(Color::Yellow),
         ]);
         counter += 1;
@@ -771,7 +766,6 @@ fn handle_list_and_ledger_command(verbose: bool) {
 
     println!("{}", table);
     println!("💡 想查看檔案詳細資訊，請使用參數: a --show <文件名>");
-    println!("💡 同步今年筆記並檢視清單: a -l -s (或 a -l --sync)\n");
 }
 
 // 🛡️ 遠端檔案在位套殼加密控制邏輯 (Remote In-Place Encapsulate & Clean Original)

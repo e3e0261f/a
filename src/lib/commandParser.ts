@@ -6,32 +6,32 @@ import { listGistFiles, fetchFromGist, syncToGist, deleteFromGist } from './gist
 export const A_INFO_LINES: string[] = [
   '用法: a [機密筆記內容/支援多行]    # 追加寫入年度機密檔案',
   '      cat 檔案 | a                 # 管道串流寫入',
-  '      a -e [文件名]                # 強制加密模式',
-  '      a -p [密碼] [檔案]           # 對稱 S2K 密碼防窮舉加密',
-  '      a -x [文件名]                # 解密一層加密封裝',
-  '      a -n [文件名] [文件內容]     # 創建新文件 在雲端/本地',
-  '      a -m [文件名] [新文件名]     # 重命名',
-  '      a -f [文件名]                # 刪除檔案/遠端檔案',
-  '      a -t [標籤] [密鑰]           # 新增 TOTP 註冊驗證密鑰',
-  '        -t                         # 列印所有 TOTP 標籤',
-  '        -t [標籤]                  # 列印 6 位動態碼',
-  '      a -k                         # 金鑰審計清單',
   '      a -a                         # 解密並列印今年度機密文檔',
   '        -aes                       # 加密推送年度機密檔案',
   '        -aus                       # 明文推送年度機密檔案',
-  '      a -s [文件名]                # 推送',
-  '      a -u                         # 強制明文模式',
-  '      a -l                         # 檢索雲端 Gist 倉庫全部檔案清單',
+  '      a -b                         # 操作全部',
+  '        -bd                        # 拉取遠端 Gist 全部文件，覆蓋本地檔案目錄',
+  '        -bs                        # 推送本地檔案目錄全部文件，覆蓋遠端 Gist 倉庫',
   '      a -d [文件名]                # 下載',
+  '      a -e [文件名]                # 強制加密模式',
+  '      a -f [文件名]                # 刪除檔案/遠端檔案',
+  '      a -i [不可參數搭配]          # 系統重新配置 /密鑰/Gist ID/檔案目錄/Token',
+  '      a -k                         # 金鑰審計清單',
+  '      a -l                         # 檢索雲端 Gist 倉庫全部檔案清單',
+  '      a -m [文件名] [新文件名]     # 重命名',
+  '      a -n [文件名] [文件內容]     # 創建新文件 在雲端/本地',
   '      a -o [目標路徑或./]          # 指定檔名/本地操作',
+  '      a -p [密碼] [檔案]           # 對稱 S2K 密碼防窮舉加密',
   '      a -r1 或 a -r 1              # 刪除年度機密檔案【倒數第 1 行】',
   '      a -r1-100 或 a -r 1-100      # 刪除年度機密檔案【倒數 1 至 100 行】',
   '      a -r [關鍵字]                # 刪除年度機密檔案 包含該關鍵字的所有行',
+  '      a -s [文件名]                # 推送',
+  '      a -t [標籤] [密鑰]           # 新增 TOTP 註冊驗證密鑰',
+  '        -t                         # 列印所有 TOTP 標籤',
+  '        -t [標籤]                  # 列印 6 位動態碼',
+  '      a -u                         # 強制明文模式',
   '      a -w                         # 【網頁管理引擎】啟動 Web 視覺化管理後台',
-  '      a -b                         # 操作全部',
-  '        -bs                        # 推送本地檔案目錄全部文件，覆蓋遠端 Gist 倉庫',
-  '        -bd                        # 拉取遠端 Gist 全部文件，覆蓋本地檔案目錄',
-  '      a -i [不可參數搭配]          # 系統重新配置 /密鑰/Gist ID/檔案目錄/Token',
+  '      a -x [文件名]                # 解密一層加密封裝',
 ];
 
 
@@ -552,14 +552,12 @@ export async function executeCommand(
       addLine('❌ 錯誤：未配置雲端 Gist ID。請執行 a -i 進行設定。', 'red');
       return;
     }
+    const cleanGistId = config.gistId.split('/').pop() || config.gistId;
+    const gistUrl = `https://gist.github.com/${cleanGistId}`;
+    addLine(`🌐 倉庫網址 : ${gistUrl}`, 'cyan');
     addLine('📡 [雲端檢索] 正在連線 GitHub Gist 比對遠端 Hash 與清單，請稍候...', 'cyan');
     try {
       const files = await listGistFiles(config.gistId, config.tokenDecrypted || '');
-      const cleanGistId = config.gistId.split('/').pop() || config.gistId;
-      const gistUrl = `https://gist.github.com/${cleanGistId}`;
-      addLine('', 'white');
-      addLine('🛡️  Cyber-NOte 檔案清單', 'white', true);
-      addLine(`🌐 倉庫網址 : ${gistUrl}`, 'cyan');
 
       // 🌟 永遠以遠端為準，覆蓋本地持久化配置與快取！
       const currentLocal = loadAllNotes();
@@ -580,13 +578,25 @@ export async function executeCommand(
         onNotesChange(updatedLocalNotes);
       }
 
-      files.forEach((f, idx) => {
-        const num = String(idx + 1).padStart(2, '0');
-        const isEnc = f.filename.endsWith('.gpg') || f.filename.endsWith('.asc');
-        const icon = isEnc ? '🛡️' : '💡';
-        addLine(`[${num}]  ${icon}  ${f.filename}`, isEnc ? 'green' : 'cyan');
+      let counter = 1;
+      // 遠端健康檔案 (綠色)
+      files.forEach((f) => {
+        const num = String(counter).padStart(2, '0');
+        addLine(`[${num}] ${f.filename}`, 'green');
+        counter++;
       });
-      addLine("💡 可使用 'a -d [檔名]' 下載，或 'a -x [檔名]' 自動破甲解密還原。", 'green');
+
+      // 本地未上傳檔案 (黃色)
+      for (const [k, n] of Object.entries(currentLocal)) {
+        const fname = n.filename || k;
+        if (!remoteFileMap.has(fname) && !remoteFileMap.has(`${fname}.gpg`)) {
+          const num = String(counter).padStart(2, '0');
+          addLine(`[${num}] ${fname}`, 'yellow');
+          counter++;
+        }
+      }
+
+      addLine("💡 想查看檔案詳細資訊，請使用參數: a --show <文件名>", 'green');
     } catch (e) {
       addLine(`⚠️ 獲取清單失敗: ${e instanceof Error ? e.message : String(e)}`, 'red');
     }
