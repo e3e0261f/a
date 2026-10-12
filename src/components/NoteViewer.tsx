@@ -135,7 +135,7 @@ export const NoteViewer: React.FC<NoteViewerProps> = ({
       onNotesChange(loadAllNotes());
       setDecryptedText(newDecrypted);
       setNewNoteInput('');
-      flashSuccess('✨ 靈感已安全縫合並以 GPG 公鑰加密封存！');
+      flashSuccess('✨ 靈感已安全縫合並以 GPG 公鑰加密封存（純本地操作，未上傳）！');
     } catch (err) {
       alert(`寫入失敗: ${err instanceof Error ? err.message : String(err)}`);
     } finally {

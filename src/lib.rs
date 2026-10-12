@@ -295,7 +295,7 @@ impl GameConfig {
             }
         }
 
-        Err("未配置 GPG 金鑰，請執行 'a --init' 進行配置。".to_string())
+        Err("未配置 GPG 金鑰，請執行 'a -i' 進行配置。".to_string())
     }
 
     // 🌐 動態提領 Gist ID 並組裝標準 API 網址
@@ -359,7 +359,7 @@ impl GameConfig {
             }
         }
 
-        Err("未配置雲端 Gist ID，請執行 'a --init' 進行配置。".to_string())
+        Err("未配置雲端 Gist ID，請執行 'a -i' 進行配置。".to_string())
     }
 
     // 🧹 萃取乾淨 ID

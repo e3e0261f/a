@@ -217,7 +217,7 @@ fn get_github_token(verbose: bool) -> Result<String, String> {
 
     let encrypted_token = fs::read_to_string(&token_path).map_err(|e| {
         format!(
-            "無法讀取加密 Token 檔 ({:?}): 請先執行 'a --init' 配置 (錯誤: {})",
+            "無法讀取加密 Token 檔 ({:?}): 請先執行 'a -i' 配置 (錯誤: {})",
             token_path, e
         )
     })?;
@@ -353,7 +353,7 @@ fn handle_new_repo_command(args: &[String], verbose: bool) {
             Ok(t) => t,
             Err(e) => {
                 println!("❌ 無法取得 GitHub Token: {}", e);
-                println!("💡 請先執行 'a --init' 配置並封裝 GPG 憑證。");
+                println!("💡 請先執行 'a -i' 配置並封裝 GPG 憑證。");
                 return;
             }
         };
@@ -2376,14 +2376,8 @@ fn main() {
         return;
     }
 
-    // ✨ 無參數且無管道輸入：展示系統狀態儀表板與簡潔命令規範
+    // ✨ 無參數且無管道輸入：展示系統狀態儀表板與簡潔命令規範 (立即響應，絕不自動阻塞彈出引導精靈)
     if args.len() < 2 && !has_pipe {
-        if !GameConfig::is_configured() && io::stdin().is_terminal() {
-            println!("👋 檢測到系統尚未完成金鑰鎖定，正在啟動引導精靈...");
-            run_init_wizard();
-            return;
-        }
-
         let current_key =
             GameConfig::get_gpg_user_id().unwrap_or_else(|_| "未配置 (嚴格鎖定 GPG)".to_string());
         let current_gist = GameConfig::get_gist_id().unwrap_or_else(|_| "未配置".to_string());
@@ -2834,15 +2828,16 @@ fn main() {
                     );
                     if has_pipe {
                         println!(
-                            "✨ 管道串流資料已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔！",
+                            "✨ 管道串流資料已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔（純本地操作，未上傳）！",
                             current_year
                         );
                     } else {
                         println!(
-                            "✨ 機密筆記已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔！",
+                            "✨ 機密筆記已成功以 GPG 鎖定公鑰加密追加至本地 {} 文檔（純本地操作，未上傳）！",
                             current_year
                         );
                     }
+                    println!("💡 提示：上傳為手動行為，如需同步至雲端倉庫請執行: a -as");
                 }
             }
             Err(e) => println!("⚠️ GPG 鎖定公鑰加密失敗: {}", e),

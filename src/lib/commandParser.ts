@@ -4,7 +4,7 @@ import { readNote, saveNote, loadAllNotes, saveAppConfig, saveAllNotes } from '.
 import { listGistFiles, fetchFromGist, syncToGist, deleteFromGist } from './gist';
 
 export const A_INFO_LINES: string[] = [
-  '用法: a [機密筆記內容/支援多行]    # 追加寫入年度機密檔案',
+  '用法: a [機密筆記內容/支援多行]    # 本地追加寫入年度機密檔案 (純本地不自動上傳)',
   '      cat 檔案 | a                 # 管道串流寫入',
   '      a -a                         # 解密並列印今年度機密文檔',
   '        -aes                       # 加密推送年度機密檔案',
@@ -840,7 +840,8 @@ export async function executeCommand(
   saveNote(updatedNote);
   onNotesChange(loadAllNotes());
 
-  addLine(`✨ 靈感已安全縫合並以【單一GPG密文包裹】加密封存於本地 ${currentYear} 廠房！`, 'green', true);
+  addLine(`✨ 靈感已安全縫合並以【單一GPG密文包裹】加密封存於本地 ${currentYear} 廠房（純本地操作，未上傳）！`, 'green', true);
   addLine(`📝 紀錄內容: ${formattedLine}`, 'cyan');
+  addLine('💡 提示：上傳為手動行為，如需同步至雲端倉庫請執行: a -as', 'gray');
   return lines;
 }
