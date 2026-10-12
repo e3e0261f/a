@@ -501,6 +501,7 @@ fn handle_rename_command(args: &[String], verbose: bool) {
 }
 
 // 🛡️ 檢視單一檔案詳細鑑識資訊 (a --show <文件名>)
+#[allow(dead_code)]
 fn handle_show_command(args: &[String], verbose: bool) {
     let target_file = args.iter().skip(1).find(|&a| a != "--show" && !a.starts_with('-')).cloned();
     let filename = match target_file {
@@ -769,6 +770,7 @@ fn handle_list_and_ledger_command(verbose: bool) {
 }
 
 // 🛡️ 遠端檔案在位套殼加密控制邏輯 (Remote In-Place Encapsulate & Clean Original)
+#[allow(dead_code)]
 fn handle_remote_encrypt_command(args: &[String], verbose: bool) {
     let delete_original = !args.iter().any(|a| a == "--keep-raw" || a == "--keep-original");
     let mut filename_opt: Option<&str> = None;
