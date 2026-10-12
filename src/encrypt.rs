@@ -32,6 +32,8 @@ pub fn encrypt_with_gpg(data: &[u8], gpg_user_id: &str) -> Result<String, String
     let mut child = Command::new("gpg")
         .arg("--batch")
         .arg("--yes")
+        .arg("--no-tty")
+        .arg("--no-auto-check-trustdb")
         .arg("--trust-model")
         .arg("always")
         .arg("--encrypt")
@@ -111,7 +113,10 @@ pub fn encrypt_symmetric_s2k(
 // 🔓 調用本地 GPG 進行二進位位元組解密（原生支援公鑰或對稱密鑰解密）
 pub fn decrypt_bytes_with_gpg(encrypted_text: &str, passphrase_opt: Option<&str>) -> Result<Vec<u8>, String> {
     let mut cmd = Command::new("gpg");
-    cmd.arg("--batch").arg("--yes");
+    cmd.arg("--batch")
+        .arg("--yes")
+        .arg("--no-tty")
+        .arg("--no-auto-check-trustdb");
 
     if let Some(pass) = passphrase_opt {
         cmd.arg("--passphrase").arg(pass);
